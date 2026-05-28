@@ -12,6 +12,7 @@
   "dependencies": {
     "@types/katex": "^0.16.8",
     "dexie": "^4.4.3",
+    "jspdf": "^3.0.4",
     "katex": "^0.17.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
