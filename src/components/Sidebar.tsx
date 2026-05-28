@@ -12,10 +12,42 @@ export default function Sidebar() {
 
   const canvas = useCanvas(activeId)
 
+  const focusTerminalInput = () => {
+    window.dispatchEvent(new CustomEvent('nullspace:focus-terminal'))
+  }
+
+  const openAndFocusTerminal = () => {
+    setTermOpen(true)
+    window.setTimeout(focusTerminalInput, 0)
+  }
+
+  const toggleTerminal = () => {
+    setTermOpen(open => {
+      const next = !open
+      if (next) window.setTimeout(focusTerminalInput, 0)
+      return next
+    })
+  }
+
   useEffect(() => {
-    const handler = () => setTermOpen(o => !o)
-    window.addEventListener('nullspace:toggle-terminal', handler)
-    return () => window.removeEventListener('nullspace:toggle-terminal', handler)
+    window.addEventListener('nullspace:toggle-terminal', toggleTerminal)
+    return () => window.removeEventListener('nullspace:toggle-terminal', toggleTerminal)
+  }, [])
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null
+      const tag = target?.tagName
+      const isTyping = tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable
+
+      if (e.key === 'Enter' && !isTyping) {
+        e.preventDefault()
+        openAndFocusTerminal()
+      }
+    }
+
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
   }, [])
 
   const commitRename = (id: string) => {
@@ -127,16 +159,16 @@ export default function Sidebar() {
         ))}
       </div>
 
-      {/* Terminal toggle button */}
+      {/* Terminal toggle button stays anchored at the bottom-left of the sidebar. */}
       <button
-        onClick={() => setTermOpen(o => !o)}
+        onClick={toggleTerminal}
         style={{
           margin: '0 8px 8px',
           padding: '7px 10px',
           borderRadius: 6,
-          background: termOpen ? 'rgba(58,122,58,0.15)' : 'transparent',
-          border: `1px solid ${termOpen ? '#2a4a2a' : 'transparent'}`,
-          color: termOpen ? '#5ab05a' : 'var(--text3)',
+          background: termOpen ? 'rgba(58,122,58,0.2)' : 'transparent',
+          border: `1px solid ${termOpen ? '#2f7d32' : 'transparent'}`,
+          color: termOpen ? '#7adf7a' : 'var(--text3)',
           fontSize: 11,
           fontFamily: '"Cascadia Code", "Fira Code", monospace',
           textAlign: 'left',
@@ -145,18 +177,35 @@ export default function Sidebar() {
           flexShrink: 0,
           letterSpacing: '0.04em',
           transition: 'all 0.15s',
+          boxShadow: termOpen
+            ? '0 0 14px rgba(90,176,90,0.45), inset 0 0 12px rgba(90,176,90,0.08)'
+            : 'none',
+          textShadow: termOpen ? '0 0 8px rgba(122,223,122,0.8)' : 'none',
         }}
         onMouseEnter={e => { if (!termOpen) (e.currentTarget.style.background = 'var(--hover)') }}
         onMouseLeave={e => { if (!termOpen) (e.currentTarget.style.background = 'transparent') }}
       >
         <span style={{ fontSize: 13 }}>{'>'}_</span>
         terminal
-        <span style={{ marginLeft: 'auto', fontSize: 9, opacity: 0.5 }}>tab</span>
+        <span style={{ marginLeft: 'auto', fontSize: 9, opacity: 0.5 }}>tab / enter</span>
       </button>
 
-      {/* Terminal panel */}
+      {/* Floating terminal panel. */}
       {termOpen && (
-        <div style={{ height: 280, flexShrink: 0, borderTop: '1px solid var(--border)' }}>
+        <div style={{
+          position: 'fixed',
+          left: 'calc(var(--sidebar-w) + 24px)',
+          bottom: 24,
+          width: 'min(620px, calc(100vw - var(--sidebar-w) - 48px))',
+          height: 330,
+          zIndex: 50,
+          border: '1px solid rgba(90,176,90,0.35)',
+          borderRadius: 12,
+          overflow: 'hidden',
+          background: 'rgba(8, 12, 8, 0.58)',
+          boxShadow: '0 20px 70px rgba(0,0,0,0.55), 0 0 30px rgba(90,176,90,0.12)',
+          backdropFilter: 'blur(10px)',
+        }}>
           <Terminal
             onUndo={canvas.undo}
             onRedo={canvas.redo}
