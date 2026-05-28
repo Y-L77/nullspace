@@ -46,6 +46,15 @@ export default function Terminal({ onUndo, onRedo, onClear }: Props) {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [lines])
 
+  useEffect(() => {
+    const focusInput = () => inputRef.current?.focus()
+
+    window.addEventListener('nullspace:focus-terminal', focusInput)
+    window.setTimeout(focusInput, 0)
+
+    return () => window.removeEventListener('nullspace:focus-terminal', focusInput)
+  }, [])
+
   const handleCommand = useCallback((raw: string) => {
     const cmd = raw.trim().toLowerCase()
     if (!cmd) return
@@ -157,8 +166,8 @@ export default function Terminal({ onUndo, onRedo, onClear }: Props) {
   return (
     <div
       style={{
-        borderTop: '1px solid var(--border)',
-        background: 'rgba(10,10,10,0.97)',
+        borderTop: '1px solid rgba(90,176,90,0.2)',
+        background: 'rgba(8, 10, 8, 0.72)',
         display: 'flex', flexDirection: 'column',
         height: '100%',
         fontFamily: '"Cascadia Code", "Fira Code", "Courier New", monospace',
@@ -176,12 +185,13 @@ export default function Terminal({ onUndo, onRedo, onClear }: Props) {
 
       {/* Header */}
       <div style={{
-        padding: '5px 10px',
-        borderBottom: '1px solid #1a2a1a',
+        padding: '6px 10px',
+        borderBottom: '1px solid rgba(90,176,90,0.22)',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         flexShrink: 0, zIndex: 2,
+        background: 'rgba(0,0,0,0.16)',
       }}>
-        <span style={{ color: '#3a7a3a', letterSpacing: '0.1em', fontSize: 10 }}>TERMINAL</span>
+        <span style={{ color: '#5ab05a', letterSpacing: '0.1em', fontSize: 10 }}>TERMINAL</span>
         <span style={{ color: toolColor[tool], fontSize: 10, letterSpacing: '0.08em' }}>
           ◆ {tool.toUpperCase()}  sz:{lineWidth}
         </span>
@@ -211,8 +221,9 @@ export default function Terminal({ onUndo, onRedo, onClear }: Props) {
       {/* Input row */}
       <div style={{
         display: 'flex', alignItems: 'center',
-        padding: '6px 10px', borderTop: '1px solid #1a2a1a',
+        padding: '6px 10px', borderTop: '1px solid rgba(90,176,90,0.22)',
         flexShrink: 0, zIndex: 2, gap: 6,
+        background: 'rgba(0,0,0,0.2)',
       }}>
         <span style={{ color: '#3a7a3a', flexShrink: 0 }}>user &gt;</span>
         <div style={{ position: 'relative', flex: 1 }}>
