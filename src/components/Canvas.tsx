@@ -12,10 +12,68 @@ const TRASH_X = 140
 const PDF_W = 816
 const PDF_H = 1056
 const PDF_M = 36
+const AFK_MS = 60_000
+const TIMER_KEY = 'nullspace.time-data.v1'
+const VALID_ZOOMS = [1, 1.5, 2, 3, 4, 5]
 
 type Block = { id: string; x: number; y: number; source: string; kind?: 'latex' | 'text' }
 type Pt = { x: number; y: number }
 type StrokeLike = { id: string; points: Pt[]; color: string; width: number; opacity: number }
+type Overlay = { x: number; y: number; camX: number; camY: number; editingId?: string }
+
+type TimeSession = {
+  id: string
+  startedAt: number
+  endedAt: number | null
+  activeMs: number
+}
+
+type NoteTimeRecord = {
+  totalMs: number
+  sessions: TimeSession[]
+}
+
+type TimeData = {
+  version: 1
+  updatedAt: number
+  notes: Record<string, NoteTimeRecord>
+}
+
+function createEmptyTimeData(): TimeData {
+  return { version: 1, updatedAt: Date.now(), notes: {} }
+}
+
+function loadTimeData(): TimeData {
+  try {
+    const raw = localStorage.getItem(TIMER_KEY)
+    if (!raw) return createEmptyTimeData()
+
+    const parsed = JSON.parse(raw) as Partial<TimeData>
+    if (!parsed || typeof parsed !== 'object' || parsed.version !== 1 || !parsed.notes) {
+      return createEmptyTimeData()
+    }
+
+    return {
+      version: 1,
+      updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : Date.now(),
+      notes: parsed.notes,
+    }
+  } catch {
+    return createEmptyTimeData()
+  }
+}
+
+function saveTimeData(data: TimeData) {
+  localStorage.setItem(TIMER_KEY, JSON.stringify(data, null, 2))
+}
+
+function formatClock(ms: number) {
+  const totalSeconds = Math.floor(ms / 1000)
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  return [hours, minutes, seconds].map(n => String(n).padStart(2, '0')).join(':')
+}
 
 function contentHeight(strokes: { points: Pt[] }[], blocks: Block[]) {
   const sy = strokes.reduce((m, s) => Math.max(m, ...s.points.map(p => p.y), 0), 0)
@@ -29,6 +87,7 @@ function drawText(ctx: CanvasRenderingContext2D, text: string, x: number, y: num
   ctx.fillStyle = '#e8e6e1'
   ctx.textBaseline = 'top'
   let yy = y
+
   for (const line of text.split('\n')) {
     let cur = ''
     for (const word of line.split(' ')) {
@@ -37,15 +96,27 @@ function drawText(ctx: CanvasRenderingContext2D, text: string, x: number, y: num
         ctx.fillText(cur, x, yy)
         yy += 22
         cur = word
-      } else cur = test
+      } else {
+        cur = test
+      }
     }
     ctx.fillText(cur, x, yy)
     yy += 22
   }
+
   ctx.restore()
 }
 
-function draw(ctx: CanvasRenderingContext2D, strokes: StrokeLike[], camX: number, camY: number, w: number, h: number, grid: boolean, zoom: number) {
+function draw(
+  ctx: CanvasRenderingContext2D,
+  strokes: StrokeLike[],
+  camX: number,
+  camY: number,
+  w: number,
+  h: number,
+  grid: boolean,
+  zoom: number,
+) {
   ctx.clearRect(0, 0, w, h)
   ctx.fillStyle = '#1c1c1c'
   ctx.fillRect(0, 0, w, h)
@@ -54,6 +125,7 @@ function draw(ctx: CanvasRenderingContext2D, strokes: StrokeLike[], camX: number
     ctx.fillStyle = '#2a2a2a'
     const sx = camX - (camX % DOT)
     const sy = camY - (camY % DOT)
+
     for (let x = sx; x < camX + w / zoom + DOT; x += DOT) {
       for (let y = sy; y < camY + h / zoom + DOT; y += DOT) {
         ctx.beginPath()
@@ -66,6 +138,7 @@ function draw(ctx: CanvasRenderingContext2D, strokes: StrokeLike[], camX: number
   ctx.save()
   ctx.scale(zoom, zoom)
   ctx.translate(-camX, -camY)
+
   for (const s of strokes) {
     if (!s.points.length) continue
     ctx.globalAlpha = s.opacity ?? 1
@@ -74,18 +147,23 @@ function draw(ctx: CanvasRenderingContext2D, strokes: StrokeLike[], camX: number
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
     ctx.beginPath()
+
     const p = s.points
     ctx.moveTo(p[0].x, p[0].y)
-    if (p.length === 1) ctx.lineTo(p[0].x + 0.1, p[0].y)
-    else {
+
+    if (p.length === 1) {
+      ctx.lineTo(p[0].x + 0.1, p[0].y)
+    } else {
       for (let i = 1; i < p.length - 1; i++) {
         ctx.quadraticCurveTo(p[i].x, p[i].y, (p[i].x + p[i + 1].x) / 2, (p[i].y + p[i + 1].y) / 2)
       }
       ctx.lineTo(p[p.length - 1].x, p[p.length - 1].y)
     }
+
     ctx.stroke()
     ctx.globalAlpha = 1
   }
+
   ctx.restore()
 }
 
@@ -93,8 +171,6 @@ function hitStroke(s: { points: Pt[]; width?: number }, x: number, y: number) {
   const r = Math.max(12, (s.width ?? 2) + 8)
   return s.points.some(p => Math.hypot(p.x - x, p.y - y) < r)
 }
-
-type Overlay = { x: number; y: number; camX: number; camY: number; editingId?: string }
 
 export default function Canvas() {
   const { tabs, activeId } = useTabStore()
@@ -109,6 +185,7 @@ export default function Canvas() {
   const camY = useRef(0)
   const zoomRef = useRef(1)
   const pan = useRef<{ x: number; y: number; cx: number; cy: number } | null>(null)
+
   const [camera, setCamera] = useState({ x: 0, y: 0 })
   const [zoom, setZoomState] = useState(1)
   const [grid, setGrid] = useState(true)
@@ -129,8 +206,122 @@ export default function Canvas() {
   const [textVal, setTextVal] = useState('')
   const textRef = useRef<HTMLTextAreaElement>(null)
 
+  const [timeData, setTimeData] = useState<TimeData>(() => loadTimeData())
+  const [isActiveNow, setIsActiveNow] = useState(true)
+  const lastActivity = useRef(Date.now())
+  const activeSession = useRef<{ noteId: string; sessionId: string } | null>(null)
+
   const blocks = canvas.latexBlocks as Block[]
   const height = contentHeight(canvas.strokes, blocks)
+  const noteMs = activeId ? (timeData.notes[activeId]?.totalMs ?? 0) : 0
+
+  const markActivity = useCallback(() => {
+    lastActivity.current = Date.now()
+    setIsActiveNow(true)
+  }, [])
+
+  const endActiveSession = useCallback(() => {
+    const current = activeSession.current
+    if (!current) return
+
+    setTimeData(prev => {
+      const note = prev.notes[current.noteId]
+      if (!note) return prev
+
+      const sessions = note.sessions.map(session => (
+        session.id === current.sessionId && session.endedAt === null
+          ? { ...session, endedAt: Date.now() }
+          : session
+      ))
+
+      return {
+        version: 1,
+        updatedAt: Date.now(),
+        notes: {
+          ...prev.notes,
+          [current.noteId]: { ...note, sessions },
+        },
+      }
+    })
+
+    activeSession.current = null
+  }, [])
+
+  useEffect(() => {
+    saveTimeData(timeData)
+  }, [timeData])
+
+  useEffect(() => {
+    endActiveSession()
+
+    if (!activeId) return
+
+    const sessionId = Math.random().toString(36).slice(2)
+    activeSession.current = { noteId: activeId, sessionId }
+    lastActivity.current = Date.now()
+    setIsActiveNow(true)
+
+    setTimeData(prev => {
+      const existing = prev.notes[activeId] ?? { totalMs: 0, sessions: [] }
+      return {
+        version: 1,
+        updatedAt: Date.now(),
+        notes: {
+          ...prev.notes,
+          [activeId]: {
+            ...existing,
+            sessions: [...existing.sessions, { id: sessionId, startedAt: Date.now(), endedAt: null, activeMs: 0 }],
+          },
+        },
+      }
+    })
+
+    return () => endActiveSession()
+  }, [activeId, endActiveSession])
+
+  useEffect(() => {
+    if (!activeId) return
+
+    const timer = window.setInterval(() => {
+      const current = activeSession.current
+      const isVisible = document.visibilityState === 'visible'
+      const isAfk = Date.now() - lastActivity.current >= AFK_MS
+      const shouldTick = Boolean(current && current.noteId === activeId && isVisible && !isAfk)
+
+      setIsActiveNow(shouldTick)
+
+      if (!shouldTick || !current) return
+
+      setTimeData(prev => {
+        const note = prev.notes[activeId] ?? { totalMs: 0, sessions: [] }
+        const sessions = note.sessions.map(session => (
+          session.id === current.sessionId
+            ? { ...session, activeMs: session.activeMs + 1000 }
+            : session
+        ))
+
+        return {
+          version: 1,
+          updatedAt: Date.now(),
+          notes: {
+            ...prev.notes,
+            [activeId]: {
+              totalMs: note.totalMs + 1000,
+              sessions,
+            },
+          },
+        }
+      })
+    }, 1000)
+
+    return () => window.clearInterval(timer)
+  }, [activeId])
+
+  useEffect(() => {
+    const activityEvents: Array<keyof WindowEventMap> = ['pointermove', 'pointerdown', 'keydown', 'wheel']
+    activityEvents.forEach(eventName => window.addEventListener(eventName, markActivity, { passive: true }))
+    return () => activityEvents.forEach(eventName => window.removeEventListener(eventName, markActivity))
+  }, [markActivity])
 
   const clampCamera = useCallback((x: number, y: number, z = zoomRef.current) => {
     const el = canvasRef.current
@@ -138,16 +329,9 @@ export default function Canvas() {
     const viewportH = el?.height ?? 800
     const visibleW = viewportW / z
     const visibleH = viewportH / z
-
-    // Horizontal panning is allowed only inside the original unzoomed viewport.
-    // At 100%, maxX = 0. At 200%, maxX = half the viewport width.
     const maxX = Math.max(0, viewportW - visibleW)
     const maxY = Math.max(0, height - visibleH)
-
-    return {
-      x: Math.max(0, Math.min(maxX, x)),
-      y: Math.max(0, Math.min(maxY, y)),
-    }
+    return { x: Math.max(0, Math.min(maxX, x)), y: Math.max(0, Math.min(maxY, y)) }
   }, [height])
 
   const setCam = useCallback((x: number, y: number, z = zoomRef.current) => {
@@ -159,16 +343,14 @@ export default function Canvas() {
 
   const world = (clientX: number, clientY: number) => {
     const r = canvasRef.current!.getBoundingClientRect()
-    return {
-      x: (clientX - r.left) / zoomRef.current + camX.current,
-      y: (clientY - r.top) / zoomRef.current + camY.current,
-    }
+    return { x: (clientX - r.left) / zoomRef.current + camX.current, y: (clientY - r.top) / zoomRef.current + camY.current }
   }
 
   const redraw = useCallback(() => {
     const el = canvasRef.current
     const ctx = el?.getContext('2d')
     if (!el || !ctx) return
+
     draw(ctx, canvas.strokes, camX.current, camY.current, el.width, el.height, grid, zoomRef.current)
 
     const thumb = barRef.current?.querySelector('.thumb') as HTMLElement | null
@@ -262,7 +444,8 @@ export default function Canvas() {
     const gridHandler = () => setGrid(v => !v)
     const zoomTo = (e: Event) => {
       const z = (e as CustomEvent<number>).detail
-      if (![1, 1.5, 2, 3].includes(z)) return
+      if (!VALID_ZOOMS.includes(z)) return
+
       const el = canvasRef.current
       const old = zoomRef.current
       const centerX = camX.current + (el?.width ?? 1000) / (2 * old)
@@ -272,17 +455,19 @@ export default function Canvas() {
       setCam(centerX - (el?.width ?? 1000) / (2 * z), centerY - (el?.height ?? 800) / (2 * z), z)
     }
     const clear = () => { setSelected(null); canvas.clear() }
+    const undo = () => canvas.undo()
+    const redo = () => canvas.redo()
 
-    window.addEventListener('nullspace:undo', canvas.undo)
-    window.addEventListener('nullspace:redo', canvas.redo)
+    window.addEventListener('nullspace:undo', undo)
+    window.addEventListener('nullspace:redo', redo)
     window.addEventListener('nullspace:clear', clear)
     window.addEventListener('nullspace:grid', gridHandler)
     window.addEventListener('nullspace:export', exportPdf)
     window.addEventListener('nullspace:zoom', zoomTo)
 
     return () => {
-      window.removeEventListener('nullspace:undo', canvas.undo)
-      window.removeEventListener('nullspace:redo', canvas.redo)
+      window.removeEventListener('nullspace:undo', undo)
+      window.removeEventListener('nullspace:redo', redo)
       window.removeEventListener('nullspace:clear', clear)
       window.removeEventListener('nullspace:grid', gridHandler)
       window.removeEventListener('nullspace:export', exportPdf)
@@ -291,6 +476,7 @@ export default function Canvas() {
   }, [canvas, exportPdf, setCam])
 
   const getCursor = () => pan.current ? 'grabbing' : tool === 'cursor' ? 'default' : (tool === 'latex' || tool === 'text') ? 'text' : tool === 'eraser' ? 'cell' : 'crosshair'
+
   const eraseAt = (x: number, y: number) => {
     const hit = [...canvas.strokes].reverse().find(s => hitStroke(s, x, y))
     if (!hit) return
@@ -298,6 +484,8 @@ export default function Canvas() {
   }
 
   const onPointerDown = (e: React.PointerEvent) => {
+    markActivity()
+
     if (e.button === 2) {
       e.preventDefault()
       pan.current = { x: e.clientX, y: e.clientY, cx: camX.current, cy: camY.current }
@@ -356,6 +544,8 @@ export default function Canvas() {
   }
 
   const onPointerMove = (e: React.PointerEvent) => {
+    markActivity()
+
     if (pan.current) {
       setCam(pan.current.cx - (e.clientX - pan.current.x) / zoomRef.current, pan.current.cy - (e.clientY - pan.current.y) / zoomRef.current)
       return
@@ -383,6 +573,8 @@ export default function Canvas() {
   }
 
   const onPointerUp = () => {
+    markActivity()
+
     if (pan.current) { pan.current = null; return }
     if (tool === 'cursor') {
       if (selected && moveSnap.current) canvas.finishMoveStroke(moveSnap.current)
@@ -398,11 +590,13 @@ export default function Canvas() {
   }
 
   const onWheel = (e: React.WheelEvent) => {
+    markActivity()
     e.preventDefault()
     setCam(camX.current, camY.current + e.deltaY / zoomRef.current)
   }
 
   const commitLatex = () => {
+    markActivity()
     if (!latexBox || !latexVal.trim()) { setLatexBox(null); setLatexVal(''); return }
     if (latexBox.editingId) canvas.removeLatexBlock(latexBox.editingId)
     canvas.addLatexBlock({ id: Math.random().toString(36).slice(2), x: latexBox.x / zoomRef.current + latexBox.camX, y: latexBox.y / zoomRef.current + latexBox.camY, source: latexVal.trim(), kind: 'latex' })
@@ -411,6 +605,7 @@ export default function Canvas() {
   }
 
   const commitText = () => {
+    markActivity()
     if (!textBox || !textVal.trim()) { setTextBox(null); setTextVal(''); return }
     if (textBox.editingId) canvas.removeLatexBlock(textBox.editingId)
     canvas.addLatexBlock({ id: Math.random().toString(36).slice(2), x: textBox.x / zoomRef.current + textBox.camX, y: textBox.y / zoomRef.current + textBox.camY, source: textVal, kind: 'text' })
@@ -434,6 +629,7 @@ export default function Canvas() {
 
   const startBlockDrag = (e: React.PointerEvent<HTMLDivElement>, b: Block) => {
     if (tool !== 'cursor') return
+    markActivity()
     e.stopPropagation()
     const p = world(e.clientX, e.clientY)
     setSelected(b.id)
@@ -446,12 +642,14 @@ export default function Canvas() {
 
   const moveBlockDrag = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!blockDrag.current) return
+    markActivity()
     const p = world(e.clientX, e.clientY)
     setTrash(e.clientX < TRASH_X)
     canvas.updateLatexBlock(blockDrag.current.id, { x: p.x - blockDrag.current.dx, y: p.y - blockDrag.current.dy })
   }
 
   const stopBlockDrag = () => {
+    markActivity()
     const id = blockDrag.current?.id
     if (id && trash) canvas.removeLatexBlock(id)
     else if (id && moveSnap.current) canvas.finishMoveLatexBlock(moveSnap.current)
@@ -462,6 +660,7 @@ export default function Canvas() {
   }
 
   const latexPreview = latexVal ? katex.renderToString(latexVal, { throwOnError: false, displayMode: true }) : ''
+  const timerLabel = isActiveNow ? 'focus' : 'idle'
 
   return <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--bg)', minWidth: 0, maxWidth: '100%' }}>
     <div style={{ padding: '11px 20px', borderBottom: '1px solid var(--border)', fontSize: 13, color: 'var(--text2)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10, overflow: 'hidden' }}>
@@ -470,6 +669,11 @@ export default function Canvas() {
       <span style={{ fontSize: 10, color: 'var(--text3)' }}>{grid ? 'grid:on' : 'grid:off'}</span>
       <span style={{ fontSize: 10, color: 'var(--text3)' }}>zoom:{Math.round(zoom * 100)}%</span>
       <span style={{ fontSize: 10, color: 'var(--text3)' }}>right-drag: pan</span>
+      <div style={{ marginLeft: 'auto' }} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px', borderRadius: 999, fontSize: 11, letterSpacing: '0.03em', border: isActiveNow ? '1px solid rgba(125,188,145,0.28)' : '1px solid rgba(198,120,120,0.24)', background: isActiveNow ? 'rgba(100,155,115,0.14)' : 'rgba(145,92,92,0.14)', color: isActiveNow ? 'rgba(202,232,210,0.92)' : 'rgba(236,201,201,0.92)', whiteSpace: 'nowrap' }}>
+        <span style={{ opacity: 0.82 }}>{timerLabel}</span>
+        <span style={{ fontVariantNumeric: 'tabular-nums' }}>{formatClock(noteMs)}</span>
+      </div>
     </div>
 
     <div ref={containerRef} style={{ flex: 1, position: 'relative', overflow: 'hidden', minWidth: 0, maxWidth: '100%' }} onContextMenu={e => e.preventDefault()}>
@@ -487,7 +691,7 @@ export default function Canvas() {
           : <div key={b.id} style={style} onPointerDown={e => startBlockDrag(e, b)} onPointerMove={moveBlockDrag} onPointerUp={stopBlockDrag} onPointerCancel={stopBlockDrag} onDoubleClick={() => tool === 'cursor' && editBlock(b)} dangerouslySetInnerHTML={{ __html: katex.renderToString(b.source, { throwOnError: false, displayMode: true }) }} />
       })}
 
-      {latexBox && <div style={{ position: 'absolute', left: latexBox.x, top: latexBox.y, zIndex: 20, background: '#141414', border: '1px solid #6fa3d4', borderRadius: 6, padding: 10, minWidth: 220, boxShadow: '0 4px 24px rgba(0,0,0,0.6)' }}><div style={{ fontSize: 10, color: '#6fa3d4', marginBottom: 6 }}>LaTeX</div><input ref={latexRef} value={latexVal} onChange={e => setLatexVal(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') commitLatex(); if (e.key === 'Escape') { setLatexBox(null); setLatexVal('') } }} placeholder="\frac{1}{2} + x^2" style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#e8e6e1', fontSize: 12, fontFamily: 'monospace' }} />{latexPreview && <div style={{ marginTop: 8, color: '#e8e6e1', fontSize: 14 }} dangerouslySetInnerHTML={{ __html: latexPreview }} />}<div style={{ marginTop: 6, fontSize: 9, color: '#555' }}>Enter to place · Esc to cancel</div></div>}
+      {latexBox && <div style={{ position: 'absolute', left: latexBox.x, top: latexBox.y, zIndex: 20, background: '#141414', border: '1px solid #6fa3d4', borderRadius: 6, padding: 10, minWidth: 220, boxShadow: '0 4px 24px rgba(0,0,0,0.6)' }}><div style={{ fontSize: 10, color: '#6fa3d4', marginBottom: 6 }}>LaTeX</div><input ref={latexRef} value={latexVal} onChange={e => setLatexVal(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') commitLatex(); if (e.key === 'Escape') { setLatexBox(null); setLatexVal('') } }} placeholder="\\frac{1}{2} + x^2" style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#e8e6e1', fontSize: 12, fontFamily: 'monospace' }} />{latexPreview && <div style={{ marginTop: 8, color: '#e8e6e1', fontSize: 14 }} dangerouslySetInnerHTML={{ __html: latexPreview }} />}<div style={{ marginTop: 6, fontSize: 9, color: '#555' }}>Enter to place · Esc to cancel</div></div>}
 
       {textBox && <div style={{ position: 'absolute', left: textBox.x, top: textBox.y, zIndex: 20, background: 'rgba(20,20,20,0.92)', border: '1px solid #6db88a', borderRadius: 6, padding: 10, minWidth: 260, boxShadow: '0 4px 24px rgba(0,0,0,0.6)' }}><div style={{ fontSize: 10, color: '#6db88a', marginBottom: 6 }}>Text</div><textarea ref={textRef} value={textVal} onChange={e => setTextVal(e.target.value)} onBlur={commitText} onKeyDown={e => { if (e.key === 'Escape') { setTextBox(null); setTextVal('') } if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') commitText() }} placeholder="Type notes here..." rows={4} style={{ width: 300, minHeight: 90, resize: 'both', background: 'transparent', border: 'none', outline: 'none', color: '#e8e6e1', fontSize: 14, lineHeight: 1.45, fontFamily: 'system-ui, sans-serif', whiteSpace: 'pre-wrap' }} /><div style={{ marginTop: 6, fontSize: 9, color: '#555' }}>Enter = line break · Ctrl+Enter or click away = place · Esc = cancel</div></div>}
 
