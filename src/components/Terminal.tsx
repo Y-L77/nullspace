@@ -25,9 +25,10 @@ interface Props {
   onUndo: () => void
   onRedo: () => void
   onClear: () => void
+  onClose?: () => void
 }
 
-export default function Terminal({ onUndo, onRedo, onClear }: Props) {
+export default function Terminal({ onUndo, onRedo, onClear, onClose }: Props) {
   const { tool, setTool, lineWidth, setLineWidth, setColor } = useToolbarStore()
   const [lines, setLines] = useState<Line[]>(BOOT_LINES.map(t => ({ text: t, type: 'system' })))
   const [input, setInput] = useState('')
@@ -104,7 +105,7 @@ export default function Terminal({ onUndo, onRedo, onClear }: Props) {
         push('  highlight   — semi-transparent highlight brush')
         push('  eraser      — erase strokes')
         push('  cursor      — select and move strokes / latex blocks')
-        push('  latex       — click canvas to place LaTeX equation')
+        push('  latex       — next canvas click cancels back to pen')
         push('  size        — set stroke size (prompts for value)')
         push('  color       — choose stroke color by name')
         push('  undo        — undo last action  [ctrl+z]')
@@ -121,7 +122,7 @@ export default function Terminal({ onUndo, onRedo, onClear }: Props) {
       case 'cursor': case 'cu':
         setTool('cursor'); push('tool: cursor — click strokes or latex, drag to move'); break
       case 'latex': case 'la':
-        setTool('latex'); push('tool: latex — click on canvas to place an equation'); break
+        setTool('latex'); push('tool: latex — click canvas to return to pen'); break
       case 'size': case 'sz':
         push(`current size: ${lineWidth}. enter new size (1–100):`); setAwaitingSize(true); break
       case 'color': case 'co':
@@ -139,6 +140,12 @@ export default function Terminal({ onUndo, onRedo, onClear }: Props) {
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
+      if (!input.trim() && !awaitingSize && !awaitingColor) {
+        e.preventDefault()
+        onClose?.()
+        return
+      }
+
       handleCommand(input)
       setInput('')
       setSuggestion('')
