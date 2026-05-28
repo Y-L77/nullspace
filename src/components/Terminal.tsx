@@ -3,9 +3,9 @@ import { useToolbarStore, COLOR_OPTIONS, type Tool } from '../store/toolbar'
 
 const BOOT_LINES = [
   'NULLSPACE TERMINAL v1.0.0',
-  'math notetaking system — june 2026',
+  'math notetaking system - june 2026',
   'operator: yipeng.dev@gmail.com',
-  '─────────────────────────────────────',
+  '-------------------------------------',
   'type "help" for available commands.',
   '',
 ]
@@ -26,12 +26,17 @@ function getSuggestion(input: string): string {
   return match ? `${hasSlash ? '/' : ''}${match}` : ''
 }
 
-function parseZoomValue(cmd: string): number | null {
+function parseZoomValue(cmd: string, menuChoice = false): number | null {
   const cleaned = cmd.replace('%', '').trim()
-  if (cleaned === '1' || cleaned === '100') return 1
-  if (cleaned === '1.5' || cleaned === '150') return 1.5
-  if (cleaned === '2' || cleaned === '200') return 2
-  if (cleaned === '3' || cleaned === '300') return 3
+  if (menuChoice) {
+    if (cleaned === '1') return 1.5
+    if (cleaned === '2') return 2
+    if (cleaned === '3') return 3
+  }
+  if (cleaned === '100') return 1
+  if (cleaned === '150' || cleaned === '1.5') return 1.5
+  if (cleaned === '200') return 2
+  if (cleaned === '300') return 3
   return null
 }
 
@@ -73,16 +78,14 @@ export default function Terminal({ onUndo, onRedo, onClear, onClose }: Props) {
   const handleCommand = useCallback((raw: string) => {
     const cmd = normalizeCommand(raw)
     if (!cmd) return
-
     setCmdHistory(h => [raw, ...h.filter(x => x !== raw)])
     historyIdxRef.current = -1
     push(`user > ${raw}`, 'user')
 
     if (awaitingZoom) {
-      const zoom = parseZoomValue(cmd)
-      if (!zoom) {
-        push('invalid zoom. choose 150, 200, or 300.', 'error')
-      } else {
+      const zoom = parseZoomValue(cmd, true)
+      if (!zoom) push('invalid zoom. choose 1, 2, or 3.', 'error')
+      else {
         window.dispatchEvent(new CustomEvent('nullspace:zoom', { detail: zoom }))
         push(`zoom set to ${Math.round(zoom * 100)}%.`)
       }
@@ -103,7 +106,7 @@ export default function Terminal({ onUndo, onRedo, onClear, onClose }: Props) {
       const colorByName = COLOR_OPTIONS.find(color => color.name === cmd)
       if (colorByNumber) { setColor(colorByNumber.value); push(`color set to ${colorByNumber.name}.`) }
       else if (colorByName) { setColor(colorByName.value); push(`color set to ${colorByName.name}.`) }
-      else if (/^#[0-9a-f]{3,6}$/i.test(cmd)) { setColor(cmd); push(`color set to custom.`) }
+      else if (/^#[0-9a-f]{3,6}$/i.test(cmd)) { setColor(cmd); push('color set to custom.') }
       else push('invalid color. use a name, number, or hex value.', 'error')
       setAwaitingColor(false)
       return
@@ -116,29 +119,28 @@ export default function Terminal({ onUndo, onRedo, onClear, onClose }: Props) {
     switch (command) {
       case 'help':
         push('available commands:')
-        push('  /pen        — freehand drawing tool')
-        push('  /highlight  — semi-transparent highlight brush')
-        push('  /eraser     — erase strokes')
-        push('  /cursor     — select and move strokes / text / latex')
-        push('  /text       — regular multiline text box')
-        push('  /latex      — LaTeX equation box')
-        push('  /grid       — toggle dotted grid')
-        push('  /export     — export canvas as paginated PDF')
-        push('  /zoom       — choose 150%, 200%, or 300%')
-        push('  /zoom 150   — zoom directly to 150%')
-        push('  /unzoom     — return to 100%')
-        push('  /size       — set stroke size')
-        push('  /color      — choose stroke color by name')
-        push('  /undo       — undo last action')
-        push('  /redo       — redo last action')
-        push('  /clear      — clear entire canvas')
+        push('  /pen        - freehand drawing tool')
+        push('  /highlight  - highlight brush')
+        push('  /eraser     - erase strokes')
+        push('  /cursor     - select and move objects')
+        push('  /text       - regular multiline text box')
+        push('  /latex      - LaTeX equation box')
+        push('  /grid       - toggle dotted grid')
+        push('  /export     - export canvas as paginated PDF')
+        push('  /zoom       - choose 150%, 200%, or 300%')
+        push('  /unzoom     - return to 100%')
+        push('  /size       - set stroke size')
+        push('  /color      - choose stroke color by name')
+        push('  /undo       - undo last action')
+        push('  /redo       - redo last action')
+        push('  /clear      - clear entire canvas')
         break
       case 'pen': setTool('pen'); push('tool: pen'); break
       case 'highlight': case 'hi': setTool('highlight'); push('tool: highlight'); break
       case 'eraser': case 'er': setTool('eraser'); push('tool: eraser'); break
-      case 'cursor': case 'cu': setTool('cursor'); push('tool: cursor — click objects to select, drag to move'); break
-      case 'text': case 'txt': case 't': setTool('text'); push('tool: text — click canvas to type multiline text'); break
-      case 'latex': case 'la': setTool('latex'); push('tool: latex — click canvas to place an equation'); break
+      case 'cursor': case 'cu': setTool('cursor'); push('tool: cursor'); break
+      case 'text': case 'txt': case 't': setTool('text'); push('tool: text'); break
+      case 'latex': case 'la': setTool('latex'); push('tool: latex'); break
       case 'grid': window.dispatchEvent(new CustomEvent('nullspace:grid')); push('grid toggled.'); break
       case 'export': window.dispatchEvent(new CustomEvent('nullspace:export')); push('export started.'); break
       case 'zoom': {
@@ -155,11 +157,8 @@ export default function Terminal({ onUndo, onRedo, onClear, onClose }: Props) {
         }
         break
       }
-      case 'unzoom':
-        window.dispatchEvent(new CustomEvent('nullspace:zoom', { detail: 1 }))
-        push('zoom reset to 100%.')
-        break
-      case 'size': case 'sz': push(`current size: ${lineWidth}. enter new size (1–100):`); setAwaitingSize(true); break
+      case 'unzoom': window.dispatchEvent(new CustomEvent('nullspace:zoom', { detail: 1 })); push('zoom reset to 100%.'); break
+      case 'size': case 'sz': push(`current size: ${lineWidth}. enter new size (1-100):`); setAwaitingSize(true); break
       case 'color': case 'co':
         push('select color by name or number:')
         COLOR_OPTIONS.forEach((color, i) => push(`  ${i + 1}. ${color.name}`))
@@ -174,36 +173,18 @@ export default function Terminal({ onUndo, onRedo, onClear, onClose }: Props) {
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
-      if (!input.trim() && !awaitingSize && !awaitingColor && !awaitingZoom) {
-        e.preventDefault()
-        onClose?.()
-        return
-      }
-      handleCommand(input)
-      setInput('')
-      setSuggestion('')
+      if (!input.trim() && !awaitingSize && !awaitingColor && !awaitingZoom) { e.preventDefault(); onClose?.(); return }
+      handleCommand(input); setInput(''); setSuggestion('')
     } else if (e.key === 'Tab') {
-      if (suggestion) {
-        e.preventDefault()
-        setInput(suggestion)
-        setSuggestion('')
-      }
+      if (suggestion) { e.preventDefault(); setInput(suggestion); setSuggestion('') }
     } else if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      const next = Math.min(historyIdxRef.current + 1, cmdHistory.length - 1)
-      historyIdxRef.current = next
-      setInput(cmdHistory[next] ?? '')
+      e.preventDefault(); const next = Math.min(historyIdxRef.current + 1, cmdHistory.length - 1); historyIdxRef.current = next; setInput(cmdHistory[next] ?? '')
     } else if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      const next = Math.max(historyIdxRef.current - 1, -1)
-      historyIdxRef.current = next
-      setInput(next === -1 ? '' : cmdHistory[next] ?? '')
+      e.preventDefault(); const next = Math.max(historyIdxRef.current - 1, -1); historyIdxRef.current = next; setInput(next === -1 ? '' : cmdHistory[next] ?? '')
     }
   }
 
-  const toolColor: Record<Tool, string> = {
-    pen: '#e8e6e1', highlight: '#c8b560', eraser: '#c87060', cursor: '#6fa3d4', latex: '#a07cba', text: '#6db88a',
-  }
+  const toolColor: Record<Tool, string> = { pen: '#e8e6e1', highlight: '#c8b560', eraser: '#c87060', cursor: '#6fa3d4', latex: '#a07cba', text: '#6db88a' }
 
   return (
     <div style={{ borderTop: '1px solid rgba(90,176,90,0.2)', background: 'rgba(8, 10, 8, 0.54)', display: 'flex', flexDirection: 'column', height: '100%', fontFamily: '"Cascadia Code", "Fira Code", "Courier New", monospace', fontSize: 11, position: 'relative', overflow: 'hidden' }} onClick={() => inputRef.current?.focus()}>
@@ -213,9 +194,7 @@ export default function Terminal({ onUndo, onRedo, onClear, onClose }: Props) {
         <span style={{ color: toolColor[tool], fontSize: 10, letterSpacing: '0.08em' }}>◆ {tool.toUpperCase()}  sz:{lineWidth}</span>
       </div>
       <div style={{ flex: 1, overflowY: 'auto', padding: '8px 10px', zIndex: 2, scrollbarWidth: 'thin', scrollbarColor: '#1a3a1a transparent' }}>
-        {lines.map((line, i) => (
-          <div key={i} style={{ color: line.type === 'user' ? '#7adf7a' : line.type === 'error' ? '#c87060' : line.type === 'system' ? '#3a7a3a' : '#5ab05a', lineHeight: 1.7, whiteSpace: 'pre', opacity: line.type === 'system' ? 0.7 : 1 }}>{line.text}</div>
-        ))}
+        {lines.map((line, i) => <div key={i} style={{ color: line.type === 'user' ? '#7adf7a' : line.type === 'error' ? '#c87060' : line.type === 'system' ? '#3a7a3a' : '#5ab05a', lineHeight: 1.7, whiteSpace: 'pre', opacity: line.type === 'system' ? 0.7 : 1 }}>{line.text}</div>)}
         <div ref={bottomRef} />
       </div>
       <div style={{ display: 'flex', alignItems: 'center', padding: '6px 10px', borderTop: '1px solid rgba(90,176,90,0.22)', flexShrink: 0, zIndex: 2, gap: 6, background: 'rgba(0,0,0,0.16)' }}>
