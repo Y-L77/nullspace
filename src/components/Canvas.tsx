@@ -15,18 +15,21 @@ function drawCanvas(
   scrollY: number,
   w: number,
   h: number,
+  showGrid: boolean,
 ) {
   ctx.clearRect(0, 0, w, h)
   ctx.fillStyle = '#1c1c1c'
   ctx.fillRect(0, 0, w, h)
 
-  ctx.fillStyle = '#2a2a2a'
-  const startY = scrollY % DOT_SPACING
-  for (let x = DOT_SPACING; x < w; x += DOT_SPACING) {
-    for (let y = -startY + DOT_SPACING; y < h + DOT_SPACING; y += DOT_SPACING) {
-      ctx.beginPath()
-      ctx.arc(x, y, 0.9, 0, Math.PI * 2)
-      ctx.fill()
+  if (showGrid) {
+    ctx.fillStyle = '#2a2a2a'
+    const startY = scrollY % DOT_SPACING
+    for (let x = DOT_SPACING; x < w; x += DOT_SPACING) {
+      for (let y = -startY + DOT_SPACING; y < h + DOT_SPACING; y += DOT_SPACING) {
+        ctx.beginPath()
+        ctx.arc(x, y, 0.9, 0, Math.PI * 2)
+        ctx.fill()
+      }
     }
   }
 
@@ -58,6 +61,43 @@ function drawCanvas(
   ctx.restore()
 }
 
+function drawExportText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  options: { font: string; color: string; lineHeight: number; maxWidth: number },
+) {
+  ctx.save()
+  ctx.font = options.font
+  ctx.fillStyle = options.color
+  ctx.textBaseline = 'top'
+
+  const lines = text.split('\n')
+  let currentY = y
+
+  for (const line of lines) {
+    const words = line.split(' ')
+    let currentLine = ''
+
+    for (const word of words) {
+      const testLine = currentLine ? `${currentLine} ${word}` : word
+      if (ctx.measureText(testLine).width > options.maxWidth && currentLine) {
+        ctx.fillText(currentLine, x, currentY)
+        currentY += options.lineHeight
+        currentLine = word
+      } else {
+        currentLine = testLine
+      }
+    }
+
+    ctx.fillText(currentLine, x, currentY)
+    currentY += options.lineHeight
+  }
+
+  ctx.restore()
+}
+
 function strokeHitTest(stroke: { points: { x: number; y: number }[]; width?: number }, px: number, py: number, threshold = 12) {
   const hitRadius = Math.max(threshold, (stroke.width ?? 2) + 8)
   for (const pt of stroke.points) {
@@ -70,12 +110,14 @@ interface LatexInputOverlay {
   x: number
   y: number
   canvasScrollY: number
+  editingId?: string
 }
 
 interface TextInputOverlay {
   x: number
   y: number
   canvasScrollY: number
+  editingId?: string
 }
 
 export default function Canvas() {
@@ -88,6 +130,7 @@ export default function Canvas() {
   const scrollbarRef = useRef<HTMLDivElement>(null)
   const scrollYRef = useRef(0)
   const [scrollYState, setScrollYState] = useState(0)
+  const [showGrid, setShowGrid] = useState(true)
   const isDrawing = useRef(false)
   const canvas = useCanvas(activeId)
   const snapRef = useRef<ReturnType<typeof canvas.snapshot> | null>(null)
@@ -122,7 +165,7 @@ export default function Canvas() {
     if (!el) return
     const ctx = el.getContext('2d')
     if (!ctx) return
-    drawCanvas(ctx, canvas.strokes, scrollYRef.current, el.width, el.height)
+    drawCanvas(ctx, canvas.strokes, scrollYRef.current, el.width, el.height, showGrid)
 
     const sb = scrollbarRef.current
     if (sb) {
@@ -136,7 +179,7 @@ export default function Canvas() {
         thumb.style.top = `${thumbTop}px`
       }
     }
-  }, [canvas.strokes, getHeight])
+  }, [canvas.strokes, getHeight, showGrid])
 
   useEffect(() => {
     const container = containerRef.current
@@ -153,10 +196,61 @@ export default function Canvas() {
 
   useEffect(() => { redraw() }, [redraw])
 
+  const exportVisibleCanvas = useCallback(() => {
+    const source = canvasRef.current
+    if (!source) return
+
+    const out = document.createElement('canvas')
+    out.width = source.width
+    out.height = source.height
+    const ctx = out.getContext('2d')
+    if (!ctx) return
+
+    drawCanvas(ctx, canvas.strokes, scrollYRef.current, out.width, out.height, showGrid)
+
+    for (const block of canvas.latexBlocks) {
+      const screenY = block.y - scrollYRef.current
+      if (screenY < -80 || screenY > out.height + 80) continue
+
+      if (block.kind === 'text') {
+        drawExportText(ctx, block.source, block.x + 7, screenY + 4, {
+          font: '15px system-ui, sans-serif',
+          color: '#e8e6e1',
+          lineHeight: 22,
+          maxWidth: 520,
+        })
+      } else {
+        drawExportText(ctx, `$${block.source}$`, block.x + 6, screenY + 2, {
+          font: '16px serif',
+          color: '#e8e6e1',
+          lineHeight: 24,
+          maxWidth: 520,
+        })
+      }
+    }
+
+    const link = document.createElement('a')
+    link.download = `${activeTab?.name ?? 'nullspace-note'}.png`.replace(/[^a-z0-9-_\.]/gi, '_')
+    link.href = out.toDataURL('image/png')
+    link.click()
+  }, [activeTab?.name, canvas.latexBlocks, canvas.strokes, showGrid])
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement).tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA') return
+
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (!selectedId) return
+        e.preventDefault()
+        const selectedBlock = canvas.latexBlocks.find(block => block.id === selectedId)
+        const selectedStroke = canvas.strokes.find(stroke => stroke.id === selectedId)
+        if (selectedBlock) canvas.removeLatexBlock(selectedId)
+        else if (selectedStroke) canvas.removeStroke(selectedId, canvas.snapshot())
+        setSelectedId(null)
+        return
+      }
+
       if (e.ctrlKey || e.metaKey) {
         if (e.key === 'z') { e.preventDefault(); canvas.undo() }
         if (e.key === 'y') { e.preventDefault(); canvas.redo() }
@@ -164,23 +258,29 @@ export default function Canvas() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [canvas])
+  }, [canvas, selectedId])
 
   useEffect(() => {
     const undo = () => canvas.undo()
     const redo = () => canvas.redo()
-    const clear = () => canvas.clear()
+    const clear = () => { setSelectedId(null); canvas.clear() }
+    const grid = () => setShowGrid(value => !value)
+    const exportCanvas = () => exportVisibleCanvas()
 
     window.addEventListener('nullspace:undo', undo)
     window.addEventListener('nullspace:redo', redo)
     window.addEventListener('nullspace:clear', clear)
+    window.addEventListener('nullspace:grid', grid)
+    window.addEventListener('nullspace:export', exportCanvas)
 
     return () => {
       window.removeEventListener('nullspace:undo', undo)
       window.removeEventListener('nullspace:redo', redo)
       window.removeEventListener('nullspace:clear', clear)
+      window.removeEventListener('nullspace:grid', grid)
+      window.removeEventListener('nullspace:export', exportCanvas)
     }
-  }, [canvas])
+  }, [canvas, exportVisibleCanvas])
 
   const latexPreview = latexVal
     ? katex.renderToString(latexVal, { throwOnError: false, displayMode: true })
@@ -336,6 +436,8 @@ export default function Canvas() {
       return
     }
 
+    if (latexInput.editingId) canvas.removeLatexBlock(latexInput.editingId)
+
     canvas.addLatexBlock({
       id: Math.random().toString(36).slice(2),
       x: latexInput.x,
@@ -355,6 +457,8 @@ export default function Canvas() {
       return
     }
 
+    if (textInput.editingId) canvas.removeLatexBlock(textInput.editingId)
+
     canvas.addLatexBlock({
       id: Math.random().toString(36).slice(2),
       x: textInput.x,
@@ -365,6 +469,18 @@ export default function Canvas() {
     setTextInput(null)
     setTextVal('')
     setTool('pen')
+  }
+
+  const editBlock = (block: { id: string; x: number; y: number; source: string; kind?: 'latex' | 'text' }) => {
+    if (block.kind === 'text') {
+      setTextInput({ x: block.x, y: block.y - scrollYState, canvasScrollY: scrollYState, editingId: block.id })
+      setTextVal(block.source)
+      setTimeout(() => textInputRef.current?.focus(), 10)
+    } else {
+      setLatexInput({ x: block.x, y: block.y - scrollYState, canvasScrollY: scrollYState, editingId: block.id })
+      setLatexVal(block.source)
+      setTimeout(() => latexInputRef.current?.focus(), 10)
+    }
   }
 
   const startLatexDrag = (e: React.PointerEvent<HTMLDivElement>, blockId: string, blockX: number, blockY: number) => {
@@ -421,6 +537,7 @@ export default function Canvas() {
       }}>
         <span>{activeTab?.name ?? 'Untitled'}</span>
         <span style={{ fontSize: 10, color: 'var(--text3)', marginLeft: 4 }}>[{tool}]</span>
+        <span style={{ fontSize: 10, color: 'var(--text3)' }}>{showGrid ? 'grid:on' : 'grid:off'}</span>
       </div>
 
       <div ref={containerRef} style={{ flex: 1, position: 'relative', overflow: 'hidden', minWidth: 0 }}>
@@ -471,44 +588,50 @@ export default function Canvas() {
 
         {canvas.latexBlocks.map(block => {
           const isText = block.kind === 'text'
-          return (
+          const baseStyle: React.CSSProperties = {
+            position: 'absolute',
+            left: block.x,
+            top: block.y - scrollYState,
+            color: '#e8e6e1',
+            fontSize: 15,
+            lineHeight: isText ? 1.45 : undefined,
+            pointerEvents: tool === 'cursor' ? 'auto' : 'none',
+            userSelect: 'none',
+            cursor: tool === 'cursor' ? 'move' : 'default',
+            background: isText ? 'rgba(20,20,20,0.08)' : 'transparent',
+            borderRadius: 4,
+            padding: isText ? '4px 7px' : '2px 6px',
+            border: selectedId === block.id ? '1px solid #6fa3d4' : '1px solid transparent',
+            opacity: draggingLatexId.current === block.id && latexTrashActive ? 0.55 : 1,
+            whiteSpace: isText ? 'pre-wrap' : undefined,
+            minWidth: isText ? 80 : undefined,
+            maxWidth: isText ? 520 : undefined,
+            fontFamily: isText ? 'system-ui, sans-serif' : undefined,
+          }
+
+          return isText ? (
             <div
               key={block.id}
-              style={{
-                position: 'absolute',
-                left: block.x,
-                top: block.y - scrollYState,
-                color: '#e8e6e1',
-                fontSize: isText ? 15 : 15,
-                lineHeight: isText ? 1.45 : undefined,
-                pointerEvents: tool === 'cursor' ? 'auto' : 'none',
-                userSelect: 'none',
-                cursor: tool === 'cursor' ? 'move' : 'default',
-                background: isText ? 'rgba(20,20,20,0.08)' : 'transparent',
-                borderRadius: 4,
-                padding: isText ? '4px 7px' : '2px 6px',
-                border: selectedId === block.id ? '1px solid #6fa3d4' : '1px solid transparent',
-                opacity: draggingLatexId.current === block.id && latexTrashActive ? 0.55 : 1,
-                whiteSpace: isText ? 'pre-wrap' : undefined,
-                minWidth: isText ? 80 : undefined,
-                maxWidth: isText ? 520 : undefined,
-                fontFamily: isText ? 'system-ui, sans-serif' : undefined,
-              }}
+              style={baseStyle}
               onPointerDown={e => startLatexDrag(e, block.id, block.x, block.y)}
               onPointerMove={moveLatexDrag}
               onPointerUp={stopLatexDrag}
               onPointerCancel={stopLatexDrag}
-              onDoubleClick={() => {
-                if (tool === 'cursor') {
-                  canvas.removeLatexBlock(block.id)
-                }
-              }}
-              {...(!isText
-                ? { dangerouslySetInnerHTML: { __html: katex.renderToString(block.source, { throwOnError: false, displayMode: true }) } }
-                : {})}
+              onDoubleClick={() => tool === 'cursor' && editBlock(block)}
             >
-              {isText ? block.source : null}
+              {block.source}
             </div>
+          ) : (
+            <div
+              key={block.id}
+              style={baseStyle}
+              onPointerDown={e => startLatexDrag(e, block.id, block.x, block.y)}
+              onPointerMove={moveLatexDrag}
+              onPointerUp={stopLatexDrag}
+              onPointerCancel={stopLatexDrag}
+              onDoubleClick={() => tool === 'cursor' && editBlock(block)}
+              dangerouslySetInnerHTML={{ __html: katex.renderToString(block.source, { throwOnError: false, displayMode: true }) }}
+            />
           )
         })}
 
