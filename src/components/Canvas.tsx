@@ -65,16 +65,10 @@ function strokeHitTest(stroke: { points: { x: number; y: number }[]; width?: num
   return false
 }
 
-interface LatexInputOverlay {
-  x: number
-  y: number
-  canvasScrollY: number
-}
-
 export default function Canvas() {
   const { tabs, activeId } = useTabStore()
   const activeTab = tabs.find(t => t.id === activeId)
-  const { tool, color, lineWidth } = useToolbarStore()
+  const { tool, color, lineWidth, setTool } = useToolbarStore()
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -91,10 +85,6 @@ export default function Canvas() {
   const dragOffset = useRef<{ dx: number; dy: number } | null>(null)
   const latexDragOffset = useRef<{ dx: number; dy: number } | null>(null)
   const draggingLatexId = useRef<string | null>(null)
-
-  const [latexInput, setLatexInput] = useState<LatexInputOverlay | null>(null)
-  const [latexVal, setLatexVal] = useState('')
-  const latexInputRef = useRef<HTMLInputElement>(null)
 
   const maxY = canvas.strokes.reduce((m, s) =>
     Math.max(m, ...s.points.map(p => p.y)), 0)
@@ -170,10 +160,6 @@ export default function Canvas() {
     }
   }, [canvas])
 
-  const latexPreview = latexVal
-    ? katex.renderToString(latexVal, { throwOnError: false, displayMode: true })
-    : ''
-
   const getPoint = (e: React.PointerEvent) => {
     const el = canvasRef.current!
     const rect = el.getBoundingClientRect()
@@ -200,16 +186,10 @@ export default function Canvas() {
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return
 
+    // LaTeX mode is now a temporary text-mode indicator only.
+    // First canvas click exits back to pen without opening the annoying input box.
     if (tool === 'latex') {
-      const el = canvasRef.current!
-      const rect = el.getBoundingClientRect()
-      setLatexInput({
-        x: e.clientX - rect.left,
-        y: e.clientY - rect.top,
-        canvasScrollY: scrollYRef.current,
-      })
-      setLatexVal('')
-      setTimeout(() => latexInputRef.current?.focus(), 10)
+      setTool('pen')
       return
     }
 
@@ -302,18 +282,6 @@ export default function Canvas() {
     redraw()
   }
 
-  const commitLatex = () => {
-    if (!latexInput || !latexVal.trim()) { setLatexInput(null); return }
-    canvas.addLatexBlock({
-      id: Math.random().toString(36).slice(2),
-      x: latexInput.x,
-      y: latexInput.y + latexInput.canvasScrollY,
-      source: latexVal.trim(),
-    })
-    setLatexInput(null)
-    setLatexVal('')
-  }
-
   const startLatexDrag = (e: React.PointerEvent<HTMLDivElement>, blockId: string, blockX: number, blockY: number) => {
     if (tool !== 'cursor') return
     e.stopPropagation()
@@ -396,54 +364,11 @@ export default function Canvas() {
             onPointerCancel={stopLatexDrag}
             onDoubleClick={() => {
               if (tool === 'cursor') {
-                setLatexVal(block.source)
                 canvas.removeLatexBlock(block.id)
               }
             }}
           />
         ))}
-
-        {latexInput && (
-          <div style={{
-            position: 'absolute',
-            left: latexInput.x,
-            top: latexInput.y,
-            zIndex: 20,
-            background: '#141414',
-            border: '1px solid #6fa3d4',
-            borderRadius: 6,
-            padding: 10,
-            minWidth: 220,
-            boxShadow: '0 4px 24px rgba(0,0,0,0.6)',
-          }}>
-            <div style={{ fontSize: 10, color: '#6fa3d4', marginBottom: 6 }}>LaTeX</div>
-            <input
-              ref={latexInputRef}
-              value={latexVal}
-              onChange={e => setLatexVal(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter') commitLatex()
-                if (e.key === 'Escape') { setLatexInput(null); setLatexVal('') }
-              }}
-              placeholder="\frac{1}{2} + x^2"
-              style={{
-                width: '100%', background: 'transparent',
-                border: 'none', outline: 'none',
-                color: '#e8e6e1', fontSize: 12,
-                fontFamily: 'monospace',
-              }}
-            />
-            {latexPreview && (
-              <div
-                style={{ marginTop: 8, color: '#e8e6e1', fontSize: 14 }}
-                dangerouslySetInnerHTML={{ __html: latexPreview }}
-              />
-            )}
-            <div style={{ marginTop: 6, fontSize: 9, color: '#555' }}>
-              Enter to place · Esc to cancel
-            </div>
-          </div>
-        )}
 
         <div
           ref={scrollbarRef}
