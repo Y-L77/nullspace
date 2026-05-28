@@ -57,9 +57,10 @@ function drawCanvas(
   ctx.restore()
 }
 
-function strokeHitTest(stroke: { points: { x: number; y: number }[] }, px: number, py: number, threshold = 12) {
+function strokeHitTest(stroke: { points: { x: number; y: number }[]; width?: number }, px: number, py: number, threshold = 12) {
+  const hitRadius = Math.max(threshold, (stroke.width ?? 2) + 8)
   for (const pt of stroke.points) {
-    if (Math.hypot(pt.x - px, pt.y - py) < threshold) return true
+    if (Math.hypot(pt.x - px, pt.y - py) < hitRadius) return true
   }
   return false
 }
@@ -79,14 +80,17 @@ export default function Canvas() {
   const containerRef = useRef<HTMLDivElement>(null)
   const scrollbarRef = useRef<HTMLDivElement>(null)
   const scrollYRef = useRef(0)
-  const [scrollYState, setScrollYState] = useState(0)  // for overlay positioning
+  const [scrollYState, setScrollYState] = useState(0)
   const isDrawing = useRef(false)
   const snapRef = useRef<ReturnType<typeof canvas.snapshot> | null>(null)
+  const moveSnapRef = useRef<ReturnType<typeof canvas.snapshot> | null>(null)
 
   const canvas = useCanvas(activeId)
 
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const dragOffset = useRef<{ dx: number; dy: number } | null>(null)
+  const latexDragOffset = useRef<{ dx: number; dy: number } | null>(null)
+  const draggingLatexId = useRef<string | null>(null)
 
   const [latexInput, setLatexInput] = useState<LatexInputOverlay | null>(null)
   const [latexVal, setLatexVal] = useState('')
@@ -150,7 +154,22 @@ export default function Canvas() {
     return () => window.removeEventListener('keydown', handler)
   }, [canvas])
 
-  // Compute latex preview synchronously — no useEffect needed
+  useEffect(() => {
+    const undo = () => canvas.undo()
+    const redo = () => canvas.redo()
+    const clear = () => canvas.clear()
+
+    window.addEventListener('nullspace:undo', undo)
+    window.addEventListener('nullspace:redo', redo)
+    window.addEventListener('nullspace:clear', clear)
+
+    return () => {
+      window.removeEventListener('nullspace:undo', undo)
+      window.removeEventListener('nullspace:redo', redo)
+      window.removeEventListener('nullspace:clear', clear)
+    }
+  }, [canvas])
+
   const latexPreview = latexVal
     ? katex.renderToString(latexVal, { throwOnError: false, displayMode: true })
     : ''
@@ -171,6 +190,13 @@ export default function Canvas() {
     return 'crosshair'
   }
 
+  const eraseAt = (x: number, y: number) => {
+    const hit = [...canvas.strokes].reverse().find(s => strokeHitTest(s, x, y))
+    if (!hit) return false
+    canvas.removeStroke(hit.id, canvas.snapshot())
+    return true
+  }
+
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return
 
@@ -187,11 +213,20 @@ export default function Canvas() {
       return
     }
 
+    if (tool === 'eraser') {
+      e.currentTarget.setPointerCapture(e.pointerId)
+      isDrawing.current = true
+      const pt = getPoint(e)
+      eraseAt(pt.x, pt.y)
+      return
+    }
+
     if (tool === 'cursor') {
       const pt = getPoint(e)
       const hit = [...canvas.strokes].reverse().find(s => strokeHitTest(s, pt.x, pt.y))
       if (hit) {
         setSelectedId(hit.id)
+        moveSnapRef.current = canvas.snapshot()
         const pts = hit.points
         const cx = pts.reduce((a, p) => a + p.x, 0) / pts.length
         const cy = pts.reduce((a, p) => a + p.y, 0) / pts.length
@@ -200,6 +235,7 @@ export default function Canvas() {
       } else {
         setSelectedId(null)
         dragOffset.current = null
+        moveSnapRef.current = null
       }
       return
     }
@@ -228,6 +264,13 @@ export default function Canvas() {
       canvas.moveStroke(selectedId, ddx, ddy)
       return
     }
+
+    if (tool === 'eraser' && isDrawing.current) {
+      const pt = getPoint(e)
+      eraseAt(pt.x, pt.y)
+      return
+    }
+
     if (!isDrawing.current) return
     const pt = getPoint(e)
     canvas.continueStroke(pt.x, pt.y)
@@ -235,9 +278,17 @@ export default function Canvas() {
 
   const onPointerUp = () => {
     if (tool === 'cursor') {
+      if (selectedId && moveSnapRef.current) canvas.finishMoveStroke(moveSnapRef.current)
       dragOffset.current = null
+      moveSnapRef.current = null
       return
     }
+
+    if (tool === 'eraser') {
+      isDrawing.current = false
+      return
+    }
+
     if (!isDrawing.current) return
     isDrawing.current = false
     canvas.endStroke(snapRef.current!)
@@ -261,6 +312,37 @@ export default function Canvas() {
     })
     setLatexInput(null)
     setLatexVal('')
+  }
+
+  const startLatexDrag = (e: React.PointerEvent<HTMLDivElement>, blockId: string, blockX: number, blockY: number) => {
+    if (tool !== 'cursor') return
+    e.stopPropagation()
+    setSelectedId(blockId)
+    draggingLatexId.current = blockId
+    moveSnapRef.current = canvas.snapshot()
+    latexDragOffset.current = {
+      dx: e.clientX - blockX,
+      dy: e.clientY - (blockY - scrollYState),
+    }
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
+
+  const moveLatexDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    const id = draggingLatexId.current
+    if (!id || !latexDragOffset.current) return
+    canvas.updateLatexBlock(id, {
+      x: e.clientX - latexDragOffset.current.dx,
+      y: e.clientY - latexDragOffset.current.dy + scrollYState,
+    })
+  }
+
+  const stopLatexDrag = () => {
+    if (draggingLatexId.current && moveSnapRef.current) {
+      canvas.finishMoveLatexBlock(moveSnapRef.current)
+    }
+    draggingLatexId.current = null
+    latexDragOffset.current = null
+    moveSnapRef.current = null
   }
 
   return (
@@ -290,7 +372,6 @@ export default function Canvas() {
           onWheel={onWheel}
         />
 
-        {/* LaTeX blocks as HTML overlays */}
         {canvas.latexBlocks.map(block => (
           <div
             key={block.id}
@@ -303,12 +384,16 @@ export default function Canvas() {
               pointerEvents: tool === 'cursor' ? 'auto' : 'none',
               userSelect: 'none',
               cursor: tool === 'cursor' ? 'move' : 'default',
-              background: 'rgba(28,28,28,0.5)',
+              background: 'transparent',
               borderRadius: 4,
               padding: '2px 6px',
               border: selectedId === block.id ? '1px solid #6fa3d4' : '1px solid transparent',
             }}
             dangerouslySetInnerHTML={{ __html: katex.renderToString(block.source, { throwOnError: false, displayMode: true }) }}
+            onPointerDown={e => startLatexDrag(e, block.id, block.x, block.y)}
+            onPointerMove={moveLatexDrag}
+            onPointerUp={stopLatexDrag}
+            onPointerCancel={stopLatexDrag}
             onDoubleClick={() => {
               if (tool === 'cursor') {
                 setLatexVal(block.source)
@@ -318,7 +403,6 @@ export default function Canvas() {
           />
         ))}
 
-        {/* LaTeX input overlay */}
         {latexInput && (
           <div style={{
             position: 'absolute',
@@ -332,9 +416,7 @@ export default function Canvas() {
             minWidth: 220,
             boxShadow: '0 4px 24px rgba(0,0,0,0.6)',
           }}>
-            <div style={{ fontSize: 10, color: '#6fa3d4', marginBottom: 6, letterSpacing: '0.08em' }}>
-              LATEX INPUT
-            </div>
+            <div style={{ fontSize: 10, color: '#6fa3d4', marginBottom: 6 }}>LaTeX</div>
             <input
               ref={latexInputRef}
               value={latexVal}
@@ -363,7 +445,6 @@ export default function Canvas() {
           </div>
         )}
 
-        {/* Scrollbar */}
         <div
           ref={scrollbarRef}
           style={{ position: 'absolute', right: 4, top: 8, bottom: 8, width: 5, borderRadius: 3, cursor: 'pointer' }}
