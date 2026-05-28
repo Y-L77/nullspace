@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-export type Tool = 'pen' | 'highlight' | 'eraser' | 'cursor' | 'latex'
+export type Tool = 'pen' | 'highlight' | 'eraser' | 'cursor' | 'latex' | 'text'
 
 export const COLOR_OPTIONS = [
   { name: 'chalk', value: '#e8e6e1' },
