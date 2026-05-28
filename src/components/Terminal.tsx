@@ -34,7 +34,7 @@ export default function Terminal({ onUndo, onRedo, onClear }: Props) {
   const [awaitingSize, setAwaitingSize] = useState(false)
   const [awaitingColor, setAwaitingColor] = useState(false)
   const [cmdHistory, setCmdHistory] = useState<string[]>([])
-  const [historyIdx, setHistoryIdx] = useState(-1)
+  const historyIdxRef = useRef(-1)
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -51,7 +51,7 @@ export default function Terminal({ onUndo, onRedo, onClear }: Props) {
     if (!cmd) return
 
     setCmdHistory(h => [raw, ...h.filter(x => x !== raw)])
-    setHistoryIdx(-1)
+    historyIdxRef.current = -1
 
     push(`user > ${raw}`, 'user')
 
@@ -135,18 +135,14 @@ export default function Terminal({ onUndo, onRedo, onClear }: Props) {
       }
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
-      setHistoryIdx(i => {
-        const next = Math.min(i + 1, cmdHistory.length - 1)
-        setInput(cmdHistory[next] ?? '')
-        return next
-      })
+      const next = Math.min(historyIdxRef.current + 1, cmdHistory.length - 1)
+      historyIdxRef.current = next
+      setInput(cmdHistory[next] ?? '')
     } else if (e.key === 'ArrowDown') {
       e.preventDefault()
-      setHistoryIdx(i => {
-        const next = Math.max(i - 1, -1)
-        setInput(next === -1 ? '' : cmdHistory[next] ?? '')
-        return next
-      })
+      const next = Math.max(historyIdxRef.current - 1, -1)
+      historyIdxRef.current = next
+      setInput(next === -1 ? '' : cmdHistory[next] ?? '')
     }
   }
 
