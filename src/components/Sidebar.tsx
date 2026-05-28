@@ -1,7 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useTabStore } from '../store/tabs'
 import Terminal from './Terminal'
-import { useCanvas } from '../hooks/useCanvas'
 
 export default function Sidebar() {
   const { tabs, activeId, addTab, removeTab, setActive, renameTab } = useTabStore()
@@ -9,8 +8,8 @@ export default function Sidebar() {
   const [editVal, setEditVal] = useState('')
   const [hoverId, setHoverId] = useState<string | null>(null)
   const [termOpen, setTermOpen] = useState(false)
-
-  const canvas = useCanvas(activeId)
+  const [terminalPos, setTerminalPos] = useState({ left: 560, top: 110 })
+  const dragRef = useRef<{ dx: number; dy: number } | null>(null)
 
   const focusTerminalInput = () => {
     window.dispatchEvent(new CustomEvent('nullspace:focus-terminal'))
@@ -30,8 +29,19 @@ export default function Sidebar() {
   }
 
   useEffect(() => {
-    window.addEventListener('nullspace:toggle-terminal', toggleTerminal)
-    return () => window.removeEventListener('nullspace:toggle-terminal', toggleTerminal)
+    const sidebarWidth = 240
+    const terminalWidth = 620
+    const availableWidth = window.innerWidth - sidebarWidth
+    setTerminalPos({
+      left: Math.max(sidebarWidth + 32, sidebarWidth + availableWidth * 0.56 - terminalWidth / 2),
+      top: Math.max(72, window.innerHeight * 0.18),
+    })
+  }, [])
+
+  useEffect(() => {
+    const handler = () => toggleTerminal()
+    window.addEventListener('nullspace:toggle-terminal', handler)
+    return () => window.removeEventListener('nullspace:toggle-terminal', handler)
   }, [])
 
   useEffect(() => {
@@ -50,9 +60,36 @@ export default function Sidebar() {
     return () => window.removeEventListener('keydown', handler)
   }, [])
 
+  const startTerminalDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    if ((e.target as HTMLElement).closest('button')) return
+    dragRef.current = {
+      dx: e.clientX - terminalPos.left,
+      dy: e.clientY - terminalPos.top,
+    }
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
+
+  const moveTerminal = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current) return
+    const nextLeft = e.clientX - dragRef.current.dx
+    const nextTop = e.clientY - dragRef.current.dy
+    setTerminalPos({
+      left: Math.max(250, Math.min(window.innerWidth - 160, nextLeft)),
+      top: Math.max(20, Math.min(window.innerHeight - 70, nextTop)),
+    })
+  }
+
+  const stopTerminalDrag = () => {
+    dragRef.current = null
+  }
+
   const commitRename = (id: string) => {
     if (editVal.trim()) renameTab(id, editVal.trim())
     setEditingId(null)
+  }
+
+  const dispatchCanvasAction = (action: 'undo' | 'redo' | 'clear') => {
+    window.dispatchEvent(new CustomEvent(`nullspace:${action}`))
   }
 
   return (
@@ -67,7 +104,6 @@ export default function Sidebar() {
       height: '100%',
       overflow: 'hidden',
     }}>
-      {/* App name */}
       <div style={{
         padding: '13px 16px 10px',
         fontSize: 12, fontWeight: 600,
@@ -77,7 +113,6 @@ export default function Sidebar() {
         NULLSPACE
       </div>
 
-      {/* New note */}
       <div style={{ padding: '8px' }}>
         <button
           onClick={addTab}
@@ -95,7 +130,6 @@ export default function Sidebar() {
         </button>
       </div>
 
-      {/* Notes list */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '0 8px 8px' }}>
         {tabs.map(tab => (
           <div
@@ -159,7 +193,6 @@ export default function Sidebar() {
         ))}
       </div>
 
-      {/* Terminal toggle button stays anchored at the bottom-left of the sidebar. */}
       <button
         onClick={toggleTerminal}
         style={{
@@ -187,30 +220,58 @@ export default function Sidebar() {
       >
         <span style={{ fontSize: 13 }}>{'>'}_</span>
         terminal
-        <span style={{ marginLeft: 'auto', fontSize: 9, opacity: 0.5 }}>tab / enter</span>
+        <span style={{ marginLeft: 'auto', fontSize: 9, opacity: 0.5 }}>enter</span>
       </button>
 
-      {/* Floating terminal panel. */}
       {termOpen && (
         <div style={{
           position: 'fixed',
-          left: 'calc(var(--sidebar-w) + 24px)',
-          bottom: 24,
+          left: terminalPos.left,
+          top: terminalPos.top,
           width: 'min(620px, calc(100vw - var(--sidebar-w) - 48px))',
           height: 330,
           zIndex: 50,
-          border: '1px solid rgba(90,176,90,0.35)',
+          border: '1px solid rgba(90,176,90,0.32)',
           borderRadius: 12,
           overflow: 'hidden',
-          background: 'rgba(8, 12, 8, 0.58)',
-          boxShadow: '0 20px 70px rgba(0,0,0,0.55), 0 0 30px rgba(90,176,90,0.12)',
-          backdropFilter: 'blur(10px)',
+          background: 'rgba(8, 12, 8, 0.32)',
+          boxShadow: '0 20px 70px rgba(0,0,0,0.45), 0 0 30px rgba(90,176,90,0.12)',
+          backdropFilter: 'blur(8px)',
         }}>
-          <Terminal
-            onUndo={canvas.undo}
-            onRedo={canvas.redo}
-            onClear={canvas.clear}
-          />
+          <div
+            onPointerDown={startTerminalDrag}
+            onPointerMove={moveTerminal}
+            onPointerUp={stopTerminalDrag}
+            onPointerCancel={stopTerminalDrag}
+            style={{
+              height: 24,
+              padding: '0 10px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              background: 'rgba(0,0,0,0.28)',
+              borderBottom: '1px solid rgba(90,176,90,0.16)',
+              cursor: 'grab',
+              userSelect: 'none',
+              fontFamily: '"Cascadia Code", "Fira Code", monospace',
+              fontSize: 10,
+              color: '#5ab05a',
+              letterSpacing: '0.08em',
+            }}
+          >
+            <span>NULLSPACE CONSOLE</span>
+            <button
+              onClick={() => setTermOpen(false)}
+              style={{ color: '#5ab05a', fontSize: 13, lineHeight: 1 }}
+            >×</button>
+          </div>
+          <div style={{ height: 'calc(100% - 24px)' }}>
+            <Terminal
+              onUndo={() => dispatchCanvasAction('undo')}
+              onRedo={() => dispatchCanvasAction('redo')}
+              onClear={() => dispatchCanvasAction('clear')}
+            />
+          </div>
         </div>
       )}
     </aside>
