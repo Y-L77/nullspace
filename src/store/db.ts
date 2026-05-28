@@ -100,7 +100,11 @@ export async function saveLatexBlock(noteId: string, block: LatexBlock, order: n
 }
 
 export async function deleteLatexBlock(noteId: string, id: string): Promise<void> {
-  await db.latexBlocks.delete(id)
+  await db.latexBlocks
+    .where('noteId')
+    .equals(noteId)
+    .and(block => block.id === id)
+    .delete()
 }
 
 export async function replaceLatexBlocks(noteId: string, blocks: LatexBlock[]): Promise<void> {
