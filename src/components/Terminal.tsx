@@ -12,13 +12,18 @@ const BOOT_LINES = [
 
 type Line = { text: string; type: 'system' | 'user' | 'output' | 'error' }
 
-const ALL_COMMANDS = ['help', 'pen', 'highlight', 'eraser', 'cursor', 'latex', 'text', 'size', 'color', 'undo', 'redo', 'clear']
+const ALL_COMMANDS = ['help', 'pen', 'highlight', 'eraser', 'cursor', 'latex', 'text', 'grid', 'export', 'size', 'color', 'undo', 'redo', 'clear']
+
+function normalizeCommand(raw: string) {
+  return raw.trim().toLowerCase().replace(/^\//, '')
+}
 
 function getSuggestion(input: string): string {
   if (!input) return ''
-  const lower = input.toLowerCase()
+  const hasSlash = input.startsWith('/')
+  const lower = input.toLowerCase().replace(/^\//, '')
   const match = ALL_COMMANDS.find(c => c.startsWith(lower) && c !== lower)
-  return match ?? ''
+  return match ? `${hasSlash ? '/' : ''}${match}` : ''
 }
 
 interface Props {
@@ -58,7 +63,7 @@ export default function Terminal({ onUndo, onRedo, onClear, onClose }: Props) {
   }, [])
 
   const handleCommand = useCallback((raw: string) => {
-    const cmd = raw.trim().toLowerCase()
+    const cmd = normalizeCommand(raw)
     if (!cmd) return
 
     setCmdHistory(h => [raw, ...h.filter(x => x !== raw)])
@@ -101,18 +106,19 @@ export default function Terminal({ onUndo, onRedo, onClear, onClose }: Props) {
     switch (cmd) {
       case 'help':
         push('available commands:')
-        push('  pen         — freehand drawing tool')
-        push('  highlight   — semi-transparent highlight brush')
-        push('  eraser      — erase strokes')
-        push('  cursor      — select and move strokes / text / latex')
-        push('  text        — regular multiline text box')
-        push('  latex       — LaTeX equation box')
-        push('  size        — set stroke size (prompts for value)')
-        push('  color       — choose stroke color by name')
-        push('  undo        — undo last action  [ctrl+z]')
-        push('  redo        — redo last action  [ctrl+y]')
-        push('  clear       — clear entire canvas')
-        push('  help        — show this list')
+        push('  /pen        — freehand drawing tool')
+        push('  /highlight  — semi-transparent highlight brush')
+        push('  /eraser     — erase strokes')
+        push('  /cursor     — select and move strokes / text / latex')
+        push('  /text       — regular multiline text box')
+        push('  /latex      — LaTeX equation box')
+        push('  /grid       — toggle dotted grid')
+        push('  /export     — export visible canvas as PNG')
+        push('  /size       — set stroke size')
+        push('  /color      — choose stroke color by name')
+        push('  /undo       — undo last action')
+        push('  /redo       — redo last action')
+        push('  /clear      — clear entire canvas')
         break
       case 'pen':
         setTool('pen'); push('tool: pen'); break
@@ -126,6 +132,14 @@ export default function Terminal({ onUndo, onRedo, onClear, onClose }: Props) {
         setTool('text'); push('tool: text — click canvas to type multiline text'); break
       case 'latex': case 'la':
         setTool('latex'); push('tool: latex — click canvas to place an equation'); break
+      case 'grid':
+        window.dispatchEvent(new CustomEvent('nullspace:grid'))
+        push('grid toggled.')
+        break
+      case 'export':
+        window.dispatchEvent(new CustomEvent('nullspace:export'))
+        push('export started.')
+        break
       case 'size': case 'sz':
         push(`current size: ${lineWidth}. enter new size (1–100):`); setAwaitingSize(true); break
       case 'color': case 'co':
