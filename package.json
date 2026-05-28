@@ -10,8 +10,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@types/katex": "^0.16.8",
+    "dexie": "^4.4.3",
+    "katex": "^0.17.0",
     "react": "^19.2.6",
-    "react-dom": "^19.2.6"
+    "react-dom": "^19.2.6",
+    "zustand": "^5.0.13"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
