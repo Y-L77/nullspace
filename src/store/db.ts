@@ -18,12 +18,15 @@ export interface StrokeRecord {
   order: number
 }
 
+export type BlockKind = 'latex' | 'text'
+
 export interface LatexRecord {
   id: string
   noteId: string
   x: number
   y: number
   source: string
+  kind?: BlockKind
   order: number
 }
 
@@ -39,6 +42,11 @@ class NullspaceDB extends Dexie {
       strokes: 'id, noteId, order',
     })
     this.version(2).stores({
+      notes: 'id, createdAt',
+      strokes: 'id, noteId, order',
+      latexBlocks: 'id, noteId, order',
+    })
+    this.version(3).stores({
       notes: 'id, createdAt',
       strokes: 'id, noteId, order',
       latexBlocks: 'id, noteId, order',
@@ -88,15 +96,16 @@ export interface LatexBlock {
   x: number
   y: number
   source: string
+  kind?: BlockKind
 }
 
 export async function getLatexBlocks(noteId: string): Promise<LatexBlock[]> {
   const records = await db.latexBlocks.where('noteId').equals(noteId).sortBy('order')
-  return records.map(r => ({ id: r.id, x: r.x, y: r.y, source: r.source }))
+  return records.map(r => ({ id: r.id, x: r.x, y: r.y, source: r.source, kind: r.kind ?? 'latex' }))
 }
 
 export async function saveLatexBlock(noteId: string, block: LatexBlock, order: number): Promise<void> {
-  await db.latexBlocks.put({ ...block, noteId, order })
+  await db.latexBlocks.put({ ...block, kind: block.kind ?? 'latex', noteId, order })
 }
 
 export async function deleteLatexBlock(noteId: string, id: string): Promise<void> {
@@ -110,6 +119,6 @@ export async function deleteLatexBlock(noteId: string, id: string): Promise<void
 export async function replaceLatexBlocks(noteId: string, blocks: LatexBlock[]): Promise<void> {
   await db.latexBlocks.where('noteId').equals(noteId).delete()
   if (blocks.length > 0) {
-    await db.latexBlocks.bulkPut(blocks.map((b, i) => ({ ...b, noteId, order: i })))
+    await db.latexBlocks.bulkPut(blocks.map((b, i) => ({ ...b, kind: b.kind ?? 'latex', noteId, order: i })))
   }
 }
