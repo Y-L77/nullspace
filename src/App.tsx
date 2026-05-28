@@ -17,28 +17,6 @@ export default function App() {
   }, [loadTabs])
 
   useEffect(() => {
-    // Temporary compatibility shim for the current Canvas zoom guard.
-    // Canvas currently accepts [1, 1.5, 2, 3]; this lets the existing guard
-    // also pass 4x and 5x without rewriting the whole canvas component.
-    const proto = Array.prototype as any
-    if (proto.__nullspaceZoomPatch) return
-
-    const originalIncludes = proto.includes
-    proto.__nullspaceZoomPatch = true
-    proto.includes = function (searchElement: unknown, ...args: unknown[]) {
-      const isCanvasZoomGuard =
-        this.length === 4 &&
-        this[0] === 1 &&
-        this[1] === 1.5 &&
-        this[2] === 2 &&
-        this[3] === 3
-
-      if (isCanvasZoomGuard && (searchElement === 4 || searchElement === 5)) return true
-      return originalIncludes.call(this, searchElement, ...args)
-    }
-  }, [])
-
-  useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null
       const tag = target?.tagName
