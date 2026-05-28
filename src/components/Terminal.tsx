@@ -12,7 +12,7 @@ const BOOT_LINES = [
 
 type Line = { text: string; type: 'system' | 'user' | 'output' | 'error' }
 
-const ALL_COMMANDS = ['help', 'pen', 'highlight', 'eraser', 'cursor', 'latex', 'size', 'color', 'undo', 'redo', 'clear']
+const ALL_COMMANDS = ['help', 'pen', 'highlight', 'eraser', 'cursor', 'latex', 'text', 'size', 'color', 'undo', 'redo', 'clear']
 
 function getSuggestion(input: string): string {
   if (!input) return ''
@@ -104,8 +104,9 @@ export default function Terminal({ onUndo, onRedo, onClear, onClose }: Props) {
         push('  pen         — freehand drawing tool')
         push('  highlight   — semi-transparent highlight brush')
         push('  eraser      — erase strokes')
-        push('  cursor      — select and move strokes / latex blocks')
-        push('  latex       — next canvas click cancels back to pen')
+        push('  cursor      — select and move strokes / text / latex')
+        push('  text        — regular multiline text box')
+        push('  latex       — LaTeX equation box')
         push('  size        — set stroke size (prompts for value)')
         push('  color       — choose stroke color by name')
         push('  undo        — undo last action  [ctrl+z]')
@@ -120,9 +121,11 @@ export default function Terminal({ onUndo, onRedo, onClear, onClose }: Props) {
       case 'eraser': case 'er':
         setTool('eraser'); push('tool: eraser'); break
       case 'cursor': case 'cu':
-        setTool('cursor'); push('tool: cursor — click strokes or latex, drag to move'); break
+        setTool('cursor'); push('tool: cursor — click objects to select, drag to move'); break
+      case 'text': case 'txt': case 't':
+        setTool('text'); push('tool: text — click canvas to type multiline text'); break
       case 'latex': case 'la':
-        setTool('latex'); push('tool: latex — click canvas to return to pen'); break
+        setTool('latex'); push('tool: latex — click canvas to place an equation'); break
       case 'size': case 'sz':
         push(`current size: ${lineWidth}. enter new size (1–100):`); setAwaitingSize(true); break
       case 'color': case 'co':
@@ -174,6 +177,7 @@ export default function Terminal({ onUndo, onRedo, onClear, onClose }: Props) {
     eraser: '#c87060',
     cursor: '#6fa3d4',
     latex: '#a07cba',
+    text: '#6db88a',
   }
 
   return (
