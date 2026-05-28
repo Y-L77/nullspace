@@ -7,6 +7,7 @@ import { useToolbarStore } from '../store/toolbar'
 
 const MIN_HEIGHT = 3000
 const DOT_SPACING = 28
+const LATEX_TRASH_ZONE_X = 140
 
 function drawCanvas(
   ctx: CanvasRenderingContext2D,
@@ -90,6 +91,8 @@ export default function Canvas() {
   const dragOffset = useRef<{ dx: number; dy: number } | null>(null)
   const latexDragOffset = useRef<{ dx: number; dy: number } | null>(null)
   const draggingLatexId = useRef<string | null>(null)
+  const [isDraggingLatex, setIsDraggingLatex] = useState(false)
+  const [latexTrashActive, setLatexTrashActive] = useState(false)
 
   const [latexInput, setLatexInput] = useState<LatexInputOverlay | null>(null)
   const [latexVal, setLatexVal] = useState('')
@@ -325,17 +328,20 @@ export default function Canvas() {
     e.stopPropagation()
     setSelectedId(blockId)
     draggingLatexId.current = blockId
+    setIsDraggingLatex(true)
     moveSnapRef.current = canvas.snapshot()
     latexDragOffset.current = {
       dx: e.clientX - blockX,
       dy: e.clientY - (blockY - scrollYState),
     }
+    setLatexTrashActive(e.clientX < LATEX_TRASH_ZONE_X)
     e.currentTarget.setPointerCapture(e.pointerId)
   }
 
   const moveLatexDrag = (e: React.PointerEvent<HTMLDivElement>) => {
     const id = draggingLatexId.current
     if (!id || !latexDragOffset.current) return
+    setLatexTrashActive(e.clientX < LATEX_TRASH_ZONE_X)
     canvas.updateLatexBlock(id, {
       x: e.clientX - latexDragOffset.current.dx,
       y: e.clientY - latexDragOffset.current.dy + scrollYState,
@@ -343,12 +349,18 @@ export default function Canvas() {
   }
 
   const stopLatexDrag = () => {
-    if (draggingLatexId.current && moveSnapRef.current) {
+    const id = draggingLatexId.current
+    if (id && latexTrashActive) {
+      canvas.removeLatexBlock(id)
+    } else if (id && moveSnapRef.current) {
       canvas.finishMoveLatexBlock(moveSnapRef.current)
     }
+
     draggingLatexId.current = null
     latexDragOffset.current = null
     moveSnapRef.current = null
+    setIsDraggingLatex(false)
+    setLatexTrashActive(false)
   }
 
   return (
@@ -378,6 +390,41 @@ export default function Canvas() {
           onWheel={onWheel}
         />
 
+        {isDraggingLatex && (
+          <div style={{
+            position: 'absolute',
+            left: 18,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            width: latexTrashActive ? 82 : 70,
+            height: latexTrashActive ? 82 : 70,
+            borderRadius: 18,
+            border: `1px solid ${latexTrashActive ? '#c87060' : 'rgba(200,112,96,0.45)'}`,
+            background: latexTrashActive ? 'rgba(200,112,96,0.18)' : 'rgba(10,10,10,0.55)',
+            color: latexTrashActive ? '#ff8a7a' : '#c87060',
+            boxShadow: latexTrashActive ? '0 0 26px rgba(200,112,96,0.45)' : '0 8px 28px rgba(0,0,0,0.35)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 4,
+            zIndex: 35,
+            pointerEvents: 'none',
+            fontFamily: 'system-ui, sans-serif',
+            fontSize: 10,
+            transition: 'all 0.12s ease',
+          }}>
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="3 6 5 6 21 6" />
+              <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+              <line x1="10" y1="11" x2="10" y2="17" />
+              <line x1="14" y1="11" x2="14" y2="17" />
+            </svg>
+            <span>{latexTrashActive ? 'release' : 'trash'}</span>
+          </div>
+        )}
+
         {canvas.latexBlocks.map(block => (
           <div
             key={block.id}
@@ -394,6 +441,7 @@ export default function Canvas() {
               borderRadius: 4,
               padding: '2px 6px',
               border: selectedId === block.id ? '1px solid #6fa3d4' : '1px solid transparent',
+              opacity: draggingLatexId.current === block.id && latexTrashActive ? 0.55 : 1,
             }}
             dangerouslySetInnerHTML={{ __html: katex.renderToString(block.source, { throwOnError: false, displayMode: true }) }}
             onPointerDown={e => startLatexDrag(e, block.id, block.x, block.y)}
