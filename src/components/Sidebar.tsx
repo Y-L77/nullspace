@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTabStore } from '../store/tabs'
 import Terminal from './Terminal'
 
@@ -14,42 +14,32 @@ export default function Sidebar() {
 
   useEffect(() => { termOpenRef.current = termOpen }, [termOpen])
 
-  const focusTerminalInput = () => {
+  const focusTerminalInput = useCallback(() => {
     window.dispatchEvent(new CustomEvent('nullspace:focus-terminal'))
-  }
+  }, [])
 
-  const openAndFocusTerminal = () => {
+  const openAndFocusTerminal = useCallback(() => {
     setTermOpen(true)
     window.setTimeout(focusTerminalInput, 0)
-  }
+  }, [focusTerminalInput])
 
-  const closeTerminal = () => {
+  const closeTerminal = useCallback(() => {
     setTermOpen(false)
-  }
+  }, [])
 
-  const toggleTerminal = () => {
+  const toggleTerminal = useCallback(() => {
     setTermOpen(open => {
       const next = !open
       if (next) window.setTimeout(focusTerminalInput, 0)
       return next
     })
-  }
-
-  useEffect(() => {
-    const sidebarWidth = 240
-    const terminalWidth = 620
-    const availableWidth = window.innerWidth - sidebarWidth
-    setTerminalPos({
-      left: Math.max(sidebarWidth + 32, sidebarWidth + availableWidth * 0.56 - terminalWidth / 2),
-      top: Math.max(72, window.innerHeight * 0.18),
-    })
-  }, [])
+  }, [focusTerminalInput])
 
   useEffect(() => {
     const handler = () => toggleTerminal()
     window.addEventListener('nullspace:toggle-terminal', handler)
     return () => window.removeEventListener('nullspace:toggle-terminal', handler)
-  }, [])
+  }, [toggleTerminal])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -66,7 +56,7 @@ export default function Sidebar() {
 
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [])
+  }, [closeTerminal, openAndFocusTerminal])
 
   const startTerminalDrag = (e: React.PointerEvent<HTMLDivElement>) => {
     if ((e.target as HTMLElement).closest('button')) return
@@ -153,14 +143,14 @@ export default function Sidebar() {
               background: tab.id === activeId ? 'var(--active)' : 'transparent',
               userSelect: 'none',
             }}
-            onMouseOver={e => { if (tab.id !== activeId) (e.currentTarget as HTMLElement).style.background = 'var(--hover)' }}
-            onMouseOut={e => { if (tab.id !== activeId) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+            onMouseOver={e => { if (tab.id !== activeId) e.currentTarget.style.background = 'var(--hover)' }}
+            onMouseOut={e => { if (tab.id !== activeId) e.currentTarget.style.background = 'transparent' }}
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
               strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
               style={{ color: 'var(--text3)', flexShrink: 0 }}>
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-              <polyline points="14 2 14 8 20 8"/>
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
             </svg>
 
             {editingId === tab.id ? (
@@ -223,8 +213,8 @@ export default function Sidebar() {
             : 'none',
           textShadow: termOpen ? '0 0 8px rgba(122,223,122,0.8)' : 'none',
         }}
-        onMouseEnter={e => { if (!termOpen) (e.currentTarget.style.background = 'var(--hover)') }}
-        onMouseLeave={e => { if (!termOpen) (e.currentTarget.style.background = 'transparent') }}
+        onMouseEnter={e => { if (!termOpen) e.currentTarget.style.background = 'var(--hover)' }}
+        onMouseLeave={e => { if (!termOpen) e.currentTarget.style.background = 'transparent' }}
       >
         <span style={{ fontSize: 13 }}>{'>'}_</span>
         terminal
