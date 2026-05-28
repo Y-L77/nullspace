@@ -72,6 +72,12 @@ interface LatexInputOverlay {
   canvasScrollY: number
 }
 
+interface TextInputOverlay {
+  x: number
+  y: number
+  canvasScrollY: number
+}
+
 export default function Canvas() {
   const { tabs, activeId } = useTabStore()
   const activeTab = tabs.find(t => t.id === activeId)
@@ -97,6 +103,10 @@ export default function Canvas() {
   const [latexInput, setLatexInput] = useState<LatexInputOverlay | null>(null)
   const [latexVal, setLatexVal] = useState('')
   const latexInputRef = useRef<HTMLInputElement>(null)
+
+  const [textInput, setTextInput] = useState<TextInputOverlay | null>(null)
+  const [textVal, setTextVal] = useState('')
+  const textInputRef = useRef<HTMLTextAreaElement>(null)
 
   const maxY = canvas.strokes.reduce((m, s) =>
     Math.max(m, ...s.points.map(p => p.y)), 0)
@@ -187,7 +197,7 @@ export default function Canvas() {
 
   const getCursor = () => {
     if (tool === 'cursor') return 'default'
-    if (tool === 'latex') return 'text'
+    if (tool === 'latex' || tool === 'text') return 'text'
     if (tool === 'eraser') return 'cell'
     return 'crosshair'
   }
@@ -213,6 +223,20 @@ export default function Canvas() {
       setLatexVal('')
       setTool('pen')
       setTimeout(() => latexInputRef.current?.focus(), 10)
+      return
+    }
+
+    if (tool === 'text') {
+      const el = canvasRef.current!
+      const rect = el.getBoundingClientRect()
+      setTextInput({
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+        canvasScrollY: scrollYRef.current,
+      })
+      setTextVal('')
+      setTool('pen')
+      setTimeout(() => textInputRef.current?.focus(), 10)
       return
     }
 
@@ -317,9 +341,29 @@ export default function Canvas() {
       x: latexInput.x,
       y: latexInput.y + latexInput.canvasScrollY,
       source: latexVal.trim(),
+      kind: 'latex',
     })
     setLatexInput(null)
     setLatexVal('')
+    setTool('pen')
+  }
+
+  const commitText = () => {
+    if (!textInput || !textVal.trim()) {
+      setTextInput(null)
+      setTextVal('')
+      return
+    }
+
+    canvas.addLatexBlock({
+      id: Math.random().toString(36).slice(2),
+      x: textInput.x,
+      y: textInput.y + textInput.canvasScrollY,
+      source: textVal,
+      kind: 'text',
+    })
+    setTextInput(null)
+    setTextVal('')
     setTool('pen')
   }
 
@@ -425,36 +469,48 @@ export default function Canvas() {
           </div>
         )}
 
-        {canvas.latexBlocks.map(block => (
-          <div
-            key={block.id}
-            style={{
-              position: 'absolute',
-              left: block.x,
-              top: block.y - scrollYState,
-              color: '#e8e6e1',
-              fontSize: 15,
-              pointerEvents: tool === 'cursor' ? 'auto' : 'none',
-              userSelect: 'none',
-              cursor: tool === 'cursor' ? 'move' : 'default',
-              background: 'transparent',
-              borderRadius: 4,
-              padding: '2px 6px',
-              border: selectedId === block.id ? '1px solid #6fa3d4' : '1px solid transparent',
-              opacity: draggingLatexId.current === block.id && latexTrashActive ? 0.55 : 1,
-            }}
-            dangerouslySetInnerHTML={{ __html: katex.renderToString(block.source, { throwOnError: false, displayMode: true }) }}
-            onPointerDown={e => startLatexDrag(e, block.id, block.x, block.y)}
-            onPointerMove={moveLatexDrag}
-            onPointerUp={stopLatexDrag}
-            onPointerCancel={stopLatexDrag}
-            onDoubleClick={() => {
-              if (tool === 'cursor') {
-                canvas.removeLatexBlock(block.id)
-              }
-            }}
-          />
-        ))}
+        {canvas.latexBlocks.map(block => {
+          const isText = block.kind === 'text'
+          return (
+            <div
+              key={block.id}
+              style={{
+                position: 'absolute',
+                left: block.x,
+                top: block.y - scrollYState,
+                color: '#e8e6e1',
+                fontSize: isText ? 15 : 15,
+                lineHeight: isText ? 1.45 : undefined,
+                pointerEvents: tool === 'cursor' ? 'auto' : 'none',
+                userSelect: 'none',
+                cursor: tool === 'cursor' ? 'move' : 'default',
+                background: isText ? 'rgba(20,20,20,0.08)' : 'transparent',
+                borderRadius: 4,
+                padding: isText ? '4px 7px' : '2px 6px',
+                border: selectedId === block.id ? '1px solid #6fa3d4' : '1px solid transparent',
+                opacity: draggingLatexId.current === block.id && latexTrashActive ? 0.55 : 1,
+                whiteSpace: isText ? 'pre-wrap' : undefined,
+                minWidth: isText ? 80 : undefined,
+                maxWidth: isText ? 520 : undefined,
+                fontFamily: isText ? 'system-ui, sans-serif' : undefined,
+              }}
+              onPointerDown={e => startLatexDrag(e, block.id, block.x, block.y)}
+              onPointerMove={moveLatexDrag}
+              onPointerUp={stopLatexDrag}
+              onPointerCancel={stopLatexDrag}
+              onDoubleClick={() => {
+                if (tool === 'cursor') {
+                  canvas.removeLatexBlock(block.id)
+                }
+              }}
+              {...(!isText
+                ? { dangerouslySetInnerHTML: { __html: katex.renderToString(block.source, { throwOnError: false, displayMode: true }) } }
+                : {})}
+            >
+              {isText ? block.source : null}
+            </div>
+          )
+        })}
 
         {latexInput && (
           <div style={{
@@ -494,6 +550,51 @@ export default function Canvas() {
             )}
             <div style={{ marginTop: 6, fontSize: 9, color: '#555' }}>
               Enter to place · Esc to cancel
+            </div>
+          </div>
+        )}
+
+        {textInput && (
+          <div style={{
+            position: 'absolute',
+            left: textInput.x,
+            top: textInput.y,
+            zIndex: 20,
+            background: 'rgba(20,20,20,0.92)',
+            border: '1px solid #6db88a',
+            borderRadius: 6,
+            padding: 10,
+            minWidth: 260,
+            boxShadow: '0 4px 24px rgba(0,0,0,0.6)',
+          }}>
+            <div style={{ fontSize: 10, color: '#6db88a', marginBottom: 6 }}>Text</div>
+            <textarea
+              ref={textInputRef}
+              value={textVal}
+              onChange={e => setTextVal(e.target.value)}
+              onBlur={commitText}
+              onKeyDown={e => {
+                if (e.key === 'Escape') { setTextInput(null); setTextVal(''); setTool('pen') }
+                if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') commitText()
+              }}
+              placeholder="Type notes here..."
+              rows={4}
+              style={{
+                width: 300,
+                minHeight: 90,
+                resize: 'both',
+                background: 'transparent',
+                border: 'none',
+                outline: 'none',
+                color: '#e8e6e1',
+                fontSize: 14,
+                lineHeight: 1.45,
+                fontFamily: 'system-ui, sans-serif',
+                whiteSpace: 'pre-wrap',
+              }}
+            />
+            <div style={{ marginTop: 6, fontSize: 9, color: '#555' }}>
+              Enter = line break · Ctrl+Enter or click away = place · Esc = cancel
             </div>
           </div>
         )}
