@@ -28,16 +28,20 @@ function getSuggestion(input: string): string {
 
 function parseZoomValue(cmd: string, menuChoice = false): number | null {
   const cleaned = cmd.replace('%', '').trim()
+
   if (menuChoice) {
     if (cleaned === '1') return 1.5
     if (cleaned === '2') return 2
     if (cleaned === '3') return 3
-    if (cleaned === '4') return 5
+    if (cleaned === '4') return 4
+    if (cleaned === '5') return 5
   }
+
   if (cleaned === '100') return 1
   if (cleaned === '150' || cleaned === '1.5') return 1.5
-  if (cleaned === '200') return 2
-  if (cleaned === '300') return 3
+  if (cleaned === '200' || cleaned === '2') return 2
+  if (cleaned === '300' || cleaned === '3') return 3
+  if (cleaned === '400' || cleaned === '4') return 4
   if (cleaned === '500' || cleaned === '5') return 5
   return null
 }
@@ -80,14 +84,16 @@ export default function Terminal({ onUndo, onRedo, onClear, onClose }: Props) {
   const handleCommand = useCallback((raw: string) => {
     const cmd = normalizeCommand(raw)
     if (!cmd) return
+
     setCmdHistory(h => [raw, ...h.filter(x => x !== raw)])
     historyIdxRef.current = -1
     push(`user > ${raw}`, 'user')
 
     if (awaitingZoom) {
       const zoom = parseZoomValue(cmd, true)
-      if (!zoom) push('invalid zoom. choose 1, 2, 3, or 4.', 'error')
-      else {
+      if (!zoom) {
+        push('invalid zoom. choose 1, 2, 3, 4, or 5.', 'error')
+      } else {
         window.dispatchEvent(new CustomEvent('nullspace:zoom', { detail: zoom }))
         push(`zoom set to ${Math.round(zoom * 100)}%.`)
       }
@@ -129,7 +135,7 @@ export default function Terminal({ onUndo, onRedo, onClear, onClose }: Props) {
         push('  /latex      - LaTeX equation box')
         push('  /grid       - toggle dotted grid')
         push('  /export     - export canvas as paginated PDF')
-        push('  /zoom       - choose 150%, 200%, 300%, or 500%')
+        push('  /zoom       - choose 150%, 200%, 300%, 400%, or 500%')
         push('  /unzoom     - return to 100%')
         push('  /size       - set stroke size')
         push('  /color      - choose stroke color by name')
@@ -155,7 +161,8 @@ export default function Terminal({ onUndo, onRedo, onClear, onClose }: Props) {
           push('  1. 150%')
           push('  2. 200%')
           push('  3. 300%')
-          push('  4. 500%')
+          push('  4. 400%')
+          push('  5. 500%')
           setAwaitingZoom(true)
         }
         break
