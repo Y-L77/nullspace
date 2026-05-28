@@ -8,8 +8,11 @@ export default function Sidebar() {
   const [editVal, setEditVal] = useState('')
   const [hoverId, setHoverId] = useState<string | null>(null)
   const [termOpen, setTermOpen] = useState(false)
+  const termOpenRef = useRef(false)
   const [terminalPos, setTerminalPos] = useState({ left: 560, top: 110 })
   const dragRef = useRef<{ dx: number; dy: number } | null>(null)
+
+  useEffect(() => { termOpenRef.current = termOpen }, [termOpen])
 
   const focusTerminalInput = () => {
     window.dispatchEvent(new CustomEvent('nullspace:focus-terminal'))
@@ -18,6 +21,10 @@ export default function Sidebar() {
   const openAndFocusTerminal = () => {
     setTermOpen(true)
     window.setTimeout(focusTerminalInput, 0)
+  }
+
+  const closeTerminal = () => {
+    setTermOpen(false)
   }
 
   const toggleTerminal = () => {
@@ -52,7 +59,8 @@ export default function Sidebar() {
 
       if (e.key === 'Enter' && !isTyping) {
         e.preventDefault()
-        openAndFocusTerminal()
+        if (termOpenRef.current) closeTerminal()
+        else openAndFocusTerminal()
       }
     }
 
@@ -261,7 +269,7 @@ export default function Sidebar() {
           >
             <span>NULLSPACE CONSOLE</span>
             <button
-              onClick={() => setTermOpen(false)}
+              onClick={closeTerminal}
               style={{ color: '#5ab05a', fontSize: 13, lineHeight: 1 }}
             >×</button>
           </div>
@@ -270,6 +278,7 @@ export default function Sidebar() {
               onUndo={() => dispatchCanvasAction('undo')}
               onRedo={() => dispatchCanvasAction('redo')}
               onClear={() => dispatchCanvasAction('clear')}
+              onClose={closeTerminal}
             />
           </div>
         </div>
