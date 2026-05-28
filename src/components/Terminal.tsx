@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { useToolbarStore, COLORS, type Tool } from '../store/toolbar'
+import { useToolbarStore, COLOR_OPTIONS, type Tool } from '../store/toolbar'
 
 const BOOT_LINES = [
   'NULLSPACE TERMINAL v1.0.0',
-  'math notetaking system — build 2025',
+  'math notetaking system — june 2026',
+  'operator: yipeng.dev@gmail.com',
   '─────────────────────────────────────',
   'type "help" for available commands.',
   '',
@@ -77,15 +78,20 @@ export default function Terminal({ onUndo, onRedo, onClear }: Props) {
     }
 
     if (awaitingColor) {
-      const idx = parseInt(cmd)
-      if (!isNaN(idx) && idx >= 1 && idx <= COLORS.length) {
-        setColor(COLORS[idx - 1])
-        push(`color set to ${COLORS[idx - 1]}.`)
+      const colorByNumber = COLOR_OPTIONS[parseInt(cmd) - 1]
+      const colorByName = COLOR_OPTIONS.find(color => color.name === cmd)
+
+      if (colorByNumber) {
+        setColor(colorByNumber.value)
+        push(`color set to ${colorByNumber.name}.`)
+      } else if (colorByName) {
+        setColor(colorByName.value)
+        push(`color set to ${colorByName.name}.`)
       } else if (/^#[0-9a-f]{3,6}$/i.test(cmd)) {
         setColor(cmd)
-        push(`color set to ${cmd}.`)
+        push(`color set to custom.`)
       } else {
-        push('invalid selection.', 'error')
+        push('invalid color. use a name, number, or hex value.', 'error')
       }
       setAwaitingColor(false)
       return
@@ -100,7 +106,7 @@ export default function Terminal({ onUndo, onRedo, onClear }: Props) {
         push('  cursor      — select and move strokes / latex blocks')
         push('  latex       — click canvas to place LaTeX equation')
         push('  size        — set stroke size (prompts for value)')
-        push('  color       — choose stroke color')
+        push('  color       — choose stroke color by name')
         push('  undo        — undo last action  [ctrl+z]')
         push('  redo        — redo last action  [ctrl+y]')
         push('  clear       — clear entire canvas')
@@ -113,14 +119,14 @@ export default function Terminal({ onUndo, onRedo, onClear }: Props) {
       case 'eraser': case 'er':
         setTool('eraser'); push('tool: eraser'); break
       case 'cursor': case 'cu':
-        setTool('cursor'); push('tool: cursor — click strokes to select, drag to move'); break
+        setTool('cursor'); push('tool: cursor — click strokes or latex, drag to move'); break
       case 'latex': case 'la':
         setTool('latex'); push('tool: latex — click on canvas to place an equation'); break
       case 'size': case 'sz':
         push(`current size: ${lineWidth}. enter new size (1–100):`); setAwaitingSize(true); break
       case 'color': case 'co':
-        push('select color by number or enter hex (#rrggbb):')
-        COLORS.forEach((c, i) => push(`  ${i + 1}. ${c}`))
+        push('select color by name or number:')
+        COLOR_OPTIONS.forEach((color, i) => push(`  ${i + 1}. ${color.name}`))
         setAwaitingColor(true)
         break
       case 'undo': onUndo(); push('undo.'); break
@@ -167,7 +173,7 @@ export default function Terminal({ onUndo, onRedo, onClear }: Props) {
     <div
       style={{
         borderTop: '1px solid rgba(90,176,90,0.2)',
-        background: 'rgba(8, 10, 8, 0.72)',
+        background: 'rgba(8, 10, 8, 0.54)',
         display: 'flex', flexDirection: 'column',
         height: '100%',
         fontFamily: '"Cascadia Code", "Fira Code", "Courier New", monospace',
@@ -177,19 +183,17 @@ export default function Terminal({ onUndo, onRedo, onClear }: Props) {
       }}
       onClick={() => inputRef.current?.focus()}
     >
-      {/* Scanline overlay */}
       <div style={{
         position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 1,
-        background: 'repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.07) 2px, rgba(0,0,0,0.07) 4px)',
+        background: 'repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.055) 2px, rgba(0,0,0,0.055) 4px)',
       }} />
 
-      {/* Header */}
       <div style={{
         padding: '6px 10px',
         borderBottom: '1px solid rgba(90,176,90,0.22)',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         flexShrink: 0, zIndex: 2,
-        background: 'rgba(0,0,0,0.16)',
+        background: 'rgba(0,0,0,0.12)',
       }}>
         <span style={{ color: '#5ab05a', letterSpacing: '0.1em', fontSize: 10 }}>TERMINAL</span>
         <span style={{ color: toolColor[tool], fontSize: 10, letterSpacing: '0.08em' }}>
@@ -197,7 +201,6 @@ export default function Terminal({ onUndo, onRedo, onClear }: Props) {
         </span>
       </div>
 
-      {/* Output */}
       <div style={{
         flex: 1, overflowY: 'auto', padding: '8px 10px', zIndex: 2,
         scrollbarWidth: 'thin', scrollbarColor: '#1a3a1a transparent',
@@ -218,12 +221,11 @@ export default function Terminal({ onUndo, onRedo, onClear }: Props) {
         <div ref={bottomRef} />
       </div>
 
-      {/* Input row */}
       <div style={{
         display: 'flex', alignItems: 'center',
         padding: '6px 10px', borderTop: '1px solid rgba(90,176,90,0.22)',
         flexShrink: 0, zIndex: 2, gap: 6,
-        background: 'rgba(0,0,0,0.2)',
+        background: 'rgba(0,0,0,0.16)',
       }}>
         <span style={{ color: '#3a7a3a', flexShrink: 0 }}>user &gt;</span>
         <div style={{ position: 'relative', flex: 1 }}>
