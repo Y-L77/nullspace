@@ -20,46 +20,27 @@ type Block = { id: string; x: number; y: number; source: string; kind?: 'latex' 
 type Pt = { x: number; y: number }
 type StrokeLike = { id: string; points: Pt[]; color: string; width: number; opacity: number }
 type Overlay = { x: number; y: number; camX: number; camY: number; editingId?: string }
+type TimeSession = { id: string; startedAt: number; endedAt: number | null; activeMs: number }
+type NoteTimeRecord = { totalMs: number; sessions: TimeSession[] }
+type TimeData = { version: 1; updatedAt: number; notes: Record<string, NoteTimeRecord> }
 
-type TimeSession = {
-  id: string
-  startedAt: number
-  endedAt: number | null
-  activeMs: number
-}
-
-type NoteTimeRecord = {
-  totalMs: number
-  sessions: TimeSession[]
-}
-
-type TimeData = {
-  version: 1
-  updatedAt: number
-  notes: Record<string, NoteTimeRecord>
-}
-
-function createEmptyTimeData(): TimeData {
+function freshTimeData(): TimeData {
   return { version: 1, updatedAt: Date.now(), notes: {} }
 }
 
 function loadTimeData(): TimeData {
   try {
     const raw = localStorage.getItem(TIMER_KEY)
-    if (!raw) return createEmptyTimeData()
-
+    if (!raw) return freshTimeData()
     const parsed = JSON.parse(raw) as Partial<TimeData>
-    if (!parsed || typeof parsed !== 'object' || parsed.version !== 1 || !parsed.notes) {
-      return createEmptyTimeData()
-    }
-
+    if (!parsed || parsed.version !== 1 || !parsed.notes) return freshTimeData()
     return {
       version: 1,
       updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : Date.now(),
       notes: parsed.notes,
     }
   } catch {
-    return createEmptyTimeData()
+    return freshTimeData()
   }
 }
 
@@ -107,16 +88,7 @@ function drawText(ctx: CanvasRenderingContext2D, text: string, x: number, y: num
   ctx.restore()
 }
 
-function draw(
-  ctx: CanvasRenderingContext2D,
-  strokes: StrokeLike[],
-  camX: number,
-  camY: number,
-  w: number,
-  h: number,
-  grid: boolean,
-  zoom: number,
-) {
+function draw(ctx: CanvasRenderingContext2D, strokes: StrokeLike[], camX: number, camY: number, w: number, h: number, grid: boolean, zoom: number) {
   ctx.clearRect(0, 0, w, h)
   ctx.fillStyle = '#1c1c1c'
   ctx.fillRect(0, 0, w, h)
@@ -125,7 +97,6 @@ function draw(
     ctx.fillStyle = '#2a2a2a'
     const sx = camX - (camX % DOT)
     const sy = camY - (camY % DOT)
-
     for (let x = sx; x < camX + w / zoom + DOT; x += DOT) {
       for (let y = sy; y < camY + h / zoom + DOT; y += DOT) {
         ctx.beginPath()
@@ -138,7 +109,6 @@ function draw(
   ctx.save()
   ctx.scale(zoom, zoom)
   ctx.translate(-camX, -camY)
-
   for (const s of strokes) {
     if (!s.points.length) continue
     ctx.globalAlpha = s.opacity ?? 1
@@ -147,23 +117,18 @@ function draw(
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
     ctx.beginPath()
-
     const p = s.points
     ctx.moveTo(p[0].x, p[0].y)
-
-    if (p.length === 1) {
-      ctx.lineTo(p[0].x + 0.1, p[0].y)
-    } else {
+    if (p.length === 1) ctx.lineTo(p[0].x + 0.1, p[0].y)
+    else {
       for (let i = 1; i < p.length - 1; i++) {
         ctx.quadraticCurveTo(p[i].x, p[i].y, (p[i].x + p[i + 1].x) / 2, (p[i].y + p[i + 1].y) / 2)
       }
       ctx.lineTo(p[p.length - 1].x, p[p.length - 1].y)
     }
-
     ctx.stroke()
     ctx.globalAlpha = 1
   }
-
   ctx.restore()
 }
 
@@ -185,10 +150,13 @@ export default function Canvas() {
   const camY = useRef(0)
   const zoomRef = useRef(1)
   const pan = useRef<{ x: number; y: number; cx: number; cy: number } | null>(null)
+  const lastActivity = useRef(0)
+  const activeSession = useRef<{ noteId: string; sessionId: string } | null>(null)
 
   const [camera, setCamera] = useState({ x: 0, y: 0 })
   const [zoom, setZoomState] = useState(1)
   const [grid, setGrid] = useState(true)
+  const [isPanning, setIsPanning] = useState(false)
 
   const drawing = useRef(false)
   const snap = useRef<ReturnType<typeof canvas.snapshot> | null>(null)
@@ -208,8 +176,6 @@ export default function Canvas() {
 
   const [timeData, setTimeData] = useState<TimeData>(() => loadTimeData())
   const [isActiveNow, setIsActiveNow] = useState(true)
-  const lastActivity = useRef(Date.now())
-  const activeSession = useRef<{ noteId: string; sessionId: string } | null>(null)
 
   const blocks = canvas.latexBlocks as Block[]
   const height = contentHeight(canvas.strokes, blocks)
@@ -217,7 +183,7 @@ export default function Canvas() {
 
   const markActivity = useCallback(() => {
     lastActivity.current = Date.now()
-    setIsActiveNow(true)
+    window.setTimeout(() => setIsActiveNow(true), 0)
   }, [])
 
   const endActiveSession = useCallback(() => {
@@ -227,21 +193,13 @@ export default function Canvas() {
     setTimeData(prev => {
       const note = prev.notes[current.noteId]
       if (!note) return prev
-
+      const now = Date.now()
       const sessions = note.sessions.map(session => (
         session.id === current.sessionId && session.endedAt === null
-          ? { ...session, endedAt: Date.now() }
+          ? { ...session, endedAt: now }
           : session
       ))
-
-      return {
-        version: 1,
-        updatedAt: Date.now(),
-        notes: {
-          ...prev.notes,
-          [current.noteId]: { ...note, sessions },
-        },
-      }
+      return { version: 1, updatedAt: now, notes: { ...prev.notes, [current.noteId]: { ...note, sessions } } }
     })
 
     activeSession.current = null
@@ -252,31 +210,35 @@ export default function Canvas() {
   }, [timeData])
 
   useEffect(() => {
-    endActiveSession()
+    const timeout = window.setTimeout(() => {
+      endActiveSession()
+      if (!activeId) return
 
-    if (!activeId) return
-
-    const sessionId = Math.random().toString(36).slice(2)
-    activeSession.current = { noteId: activeId, sessionId }
-    lastActivity.current = Date.now()
-    setIsActiveNow(true)
-
-    setTimeData(prev => {
-      const existing = prev.notes[activeId] ?? { totalMs: 0, sessions: [] }
-      return {
-        version: 1,
-        updatedAt: Date.now(),
-        notes: {
-          ...prev.notes,
-          [activeId]: {
-            ...existing,
-            sessions: [...existing.sessions, { id: sessionId, startedAt: Date.now(), endedAt: null, activeMs: 0 }],
+      const now = Date.now()
+      const sessionId = Math.random().toString(36).slice(2)
+      activeSession.current = { noteId: activeId, sessionId }
+      lastActivity.current = now
+      setIsActiveNow(true)
+      setTimeData(prev => {
+        const existing = prev.notes[activeId] ?? { totalMs: 0, sessions: [] }
+        return {
+          version: 1,
+          updatedAt: now,
+          notes: {
+            ...prev.notes,
+            [activeId]: {
+              ...existing,
+              sessions: [...existing.sessions, { id: sessionId, startedAt: now, endedAt: null, activeMs: 0 }],
+            },
           },
-        },
-      }
-    })
+        }
+      })
+    }, 0)
 
-    return () => endActiveSession()
+    return () => {
+      window.clearTimeout(timeout)
+      endActiveSession()
+    }
   }, [activeId, endActiveSession])
 
   useEffect(() => {
@@ -284,33 +246,20 @@ export default function Canvas() {
 
     const timer = window.setInterval(() => {
       const current = activeSession.current
+      const now = Date.now()
       const isVisible = document.visibilityState === 'visible'
-      const isAfk = Date.now() - lastActivity.current >= AFK_MS
+      const isAfk = now - lastActivity.current >= AFK_MS
       const shouldTick = Boolean(current && current.noteId === activeId && isVisible && !isAfk)
 
       setIsActiveNow(shouldTick)
-
       if (!shouldTick || !current) return
 
       setTimeData(prev => {
         const note = prev.notes[activeId] ?? { totalMs: 0, sessions: [] }
         const sessions = note.sessions.map(session => (
-          session.id === current.sessionId
-            ? { ...session, activeMs: session.activeMs + 1000 }
-            : session
+          session.id === current.sessionId ? { ...session, activeMs: session.activeMs + 1000 } : session
         ))
-
-        return {
-          version: 1,
-          updatedAt: Date.now(),
-          notes: {
-            ...prev.notes,
-            [activeId]: {
-              totalMs: note.totalMs + 1000,
-              sessions,
-            },
-          },
-        }
+        return { version: 1, updatedAt: now, notes: { ...prev.notes, [activeId]: { totalMs: note.totalMs + 1000, sessions } } }
       })
     }, 1000)
 
@@ -413,7 +362,7 @@ export default function Canvas() {
       pdf.addImage(out.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, pageW, pageH)
     }
 
-    pdf.save(`${activeTab?.name ?? 'nullspace-note'}.pdf`.replace(/[^a-z0-9-_\.]/gi, '_'))
+    pdf.save(`${activeTab?.name ?? 'nullspace-note'}.pdf`.replace(/[^a-z0-9-_.]/gi, '_'))
   }, [activeTab?.name, blocks, canvas.strokes, grid, height])
 
   useEffect(() => {
@@ -475,7 +424,7 @@ export default function Canvas() {
     }
   }, [canvas, exportPdf, setCam])
 
-  const getCursor = () => pan.current ? 'grabbing' : tool === 'cursor' ? 'default' : (tool === 'latex' || tool === 'text') ? 'text' : tool === 'eraser' ? 'cell' : 'crosshair'
+  const getCursor = () => isPanning ? 'grabbing' : tool === 'cursor' ? 'default' : (tool === 'latex' || tool === 'text') ? 'text' : tool === 'eraser' ? 'cell' : 'crosshair'
 
   const eraseAt = (x: number, y: number) => {
     const hit = [...canvas.strokes].reverse().find(s => hitStroke(s, x, y))
@@ -489,6 +438,7 @@ export default function Canvas() {
     if (e.button === 2) {
       e.preventDefault()
       pan.current = { x: e.clientX, y: e.clientY, cx: camX.current, cy: camY.current }
+      setIsPanning(true)
       e.currentTarget.setPointerCapture(e.pointerId)
       return
     }
@@ -575,7 +525,11 @@ export default function Canvas() {
   const onPointerUp = () => {
     markActivity()
 
-    if (pan.current) { pan.current = null; return }
+    if (pan.current) {
+      pan.current = null
+      setIsPanning(false)
+      return
+    }
     if (tool === 'cursor') {
       if (selected && moveSnap.current) canvas.finishMoveStroke(moveSnap.current)
       drag.current = null
