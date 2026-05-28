@@ -6,563 +6,161 @@ import { useCanvas } from '../hooks/useCanvas'
 import { useTabStore } from '../store/tabs'
 import { useToolbarStore } from '../store/toolbar'
 
-const MIN_HEIGHT = 3000
-const DOT_SPACING = 28
-const LATEX_TRASH_ZONE_X = 140
-const PDF_PAGE_WIDTH = 816
-const PDF_PAGE_HEIGHT = 1056
-const PDF_MARGIN = 36
+const MIN_H = 3000
+const MIN_W = 2200
+const DOT = 28
+const TRASH_X = 140
+const PDF_W = 816
+const PDF_H = 1056
+const PDF_M = 36
 
-type ExportBlock = {
-  id: string
-  x: number
-  y: number
-  source: string
-  kind?: 'latex' | 'text'
+type Block = { id: string; x: number; y: number; source: string; kind?: 'latex' | 'text' }
+
+type Pt = { x: number; y: number }
+type StrokeLike = { id: string; points: Pt[]; color: string; width: number; opacity: number }
+
+function contentSize(strokes: { points: Pt[] }[], blocks: Block[]) {
+  const sx = strokes.reduce((m, s) => Math.max(m, ...s.points.map(p => p.x), 0), 0)
+  const sy = strokes.reduce((m, s) => Math.max(m, ...s.points.map(p => p.y), 0), 0)
+  const bx = blocks.reduce((m, b) => Math.max(m, b.x + 700), 0)
+  const by = blocks.reduce((m, b) => Math.max(m, b.y + (b.kind === 'text' ? b.source.split('\n').length * 24 + 80 : 100)), 0)
+  return { w: Math.max(MIN_W, sx + 700, bx), h: Math.max(MIN_H, sy + 700, by) }
 }
 
-function getContentHeight(
-  strokes: { points: { x: number; y: number }[] }[],
-  blocks: ExportBlock[],
-) {
-  const maxStrokeY = strokes.reduce((maxY, stroke) => {
-    const strokeMaxY = stroke.points.reduce((m, p) => Math.max(m, p.y), 0)
-    return Math.max(maxY, strokeMaxY)
-  }, 0)
-
-  const maxBlockY = blocks.reduce((maxY, block) => {
-    const roughHeight = block.kind === 'text'
-      ? Math.max(50, block.source.split('\n').length * 24 + 20)
-      : 60
-    return Math.max(maxY, block.y + roughHeight)
-  }, 0)
-
-  return Math.max(MIN_HEIGHT, maxStrokeY + 600, maxBlockY + 300)
+function drawText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, font: string, maxWidth = 520) {
+  ctx.save(); ctx.font = font; ctx.fillStyle = '#e8e6e1'; ctx.textBaseline = 'top'
+  let yy = y
+  for (const line of text.split('\n')) {
+    let cur = ''
+    for (const word of line.split(' ')) {
+      const test = cur ? `${cur} ${word}` : word
+      if (ctx.measureText(test).width > maxWidth && cur) { ctx.fillText(cur, x, yy); yy += 22; cur = word }
+      else cur = test
+    }
+    ctx.fillText(cur, x, yy); yy += 22
+  }
+  ctx.restore()
 }
 
-function drawCanvas(
-  ctx: CanvasRenderingContext2D,
-  strokes: { id: string; points: { x: number; y: number }[]; color: string; width: number; opacity: number }[],
-  scrollY: number,
-  w: number,
-  h: number,
-  showGrid: boolean,
-) {
-  ctx.clearRect(0, 0, w, h)
-  ctx.fillStyle = '#1c1c1c'
-  ctx.fillRect(0, 0, w, h)
-
-  if (showGrid) {
+function draw(ctx: CanvasRenderingContext2D, strokes: StrokeLike[], camX: number, camY: number, w: number, h: number, grid: boolean, zoom: number) {
+  ctx.clearRect(0, 0, w, h); ctx.fillStyle = '#1c1c1c'; ctx.fillRect(0, 0, w, h)
+  if (grid) {
     ctx.fillStyle = '#2a2a2a'
-    const startY = scrollY % DOT_SPACING
-    for (let x = DOT_SPACING; x < w; x += DOT_SPACING) {
-      for (let y = -startY + DOT_SPACING; y < h + DOT_SPACING; y += DOT_SPACING) {
-        ctx.beginPath()
-        ctx.arc(x, y, 0.9, 0, Math.PI * 2)
-        ctx.fill()
-      }
+    const sx = camX - (camX % DOT), sy = camY - (camY % DOT)
+    for (let x = sx; x < camX + w / zoom + DOT; x += DOT) for (let y = sy; y < camY + h / zoom + DOT; y += DOT) {
+      ctx.beginPath(); ctx.arc((x - camX) * zoom, (y - camY) * zoom, Math.max(0.7, 0.9 * zoom), 0, Math.PI * 2); ctx.fill()
     }
   }
-
-  ctx.save()
-  ctx.translate(0, -scrollY)
-  for (const stroke of strokes) {
-    if (stroke.points.length === 0) continue
-    ctx.globalAlpha = stroke.opacity ?? 1
-    ctx.beginPath()
-    ctx.strokeStyle = stroke.color
-    ctx.lineWidth = stroke.width
-    ctx.lineCap = 'round'
-    ctx.lineJoin = 'round'
-    const pts = stroke.points
-    ctx.moveTo(pts[0].x, pts[0].y)
-    if (pts.length === 1) {
-      ctx.lineTo(pts[0].x + 0.1, pts[0].y)
-    } else {
-      for (let i = 1; i < pts.length - 1; i++) {
-        const mx = (pts[i].x + pts[i + 1].x) / 2
-        const my = (pts[i].y + pts[i + 1].y) / 2
-        ctx.quadraticCurveTo(pts[i].x, pts[i].y, mx, my)
-      }
-      ctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y)
-    }
-    ctx.stroke()
-    ctx.globalAlpha = 1
+  ctx.save(); ctx.scale(zoom, zoom); ctx.translate(-camX, -camY)
+  for (const s of strokes) {
+    if (!s.points.length) continue
+    ctx.globalAlpha = s.opacity ?? 1; ctx.strokeStyle = s.color; ctx.lineWidth = s.width; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.beginPath()
+    const p = s.points; ctx.moveTo(p[0].x, p[0].y)
+    if (p.length === 1) ctx.lineTo(p[0].x + 0.1, p[0].y)
+    else { for (let i = 1; i < p.length - 1; i++) ctx.quadraticCurveTo(p[i].x, p[i].y, (p[i].x + p[i + 1].x) / 2, (p[i].y + p[i + 1].y) / 2); ctx.lineTo(p[p.length - 1].x, p[p.length - 1].y) }
+    ctx.stroke(); ctx.globalAlpha = 1
   }
   ctx.restore()
 }
 
-function drawExportText(
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  x: number,
-  y: number,
-  options: { font: string; color: string; lineHeight: number; maxWidth: number },
-) {
-  ctx.save()
-  ctx.font = options.font
-  ctx.fillStyle = options.color
-  ctx.textBaseline = 'top'
-
-  const lines = text.split('\n')
-  let currentY = y
-
-  for (const line of lines) {
-    const words = line.split(' ')
-    let currentLine = ''
-
-    for (const word of words) {
-      const testLine = currentLine ? `${currentLine} ${word}` : word
-      if (ctx.measureText(testLine).width > options.maxWidth && currentLine) {
-        ctx.fillText(currentLine, x, currentY)
-        currentY += options.lineHeight
-        currentLine = word
-      } else {
-        currentLine = testLine
-      }
-    }
-
-    ctx.fillText(currentLine, x, currentY)
-    currentY += options.lineHeight
-  }
-
-  ctx.restore()
+function hitStroke(s: { points: Pt[]; width?: number }, x: number, y: number) {
+  const r = Math.max(12, (s.width ?? 2) + 8)
+  return s.points.some(p => Math.hypot(p.x - x, p.y - y) < r)
 }
 
-function strokeHitTest(stroke: { points: { x: number; y: number }[]; width?: number }, px: number, py: number, threshold = 12) {
-  const hitRadius = Math.max(threshold, (stroke.width ?? 2) + 8)
-  for (const pt of stroke.points) {
-    if (Math.hypot(pt.x - px, pt.y - py) < hitRadius) return true
-  }
-  return false
-}
-
-interface LatexInputOverlay {
-  x: number
-  y: number
-  canvasScrollY: number
-  editingId?: string
-}
-
-interface TextInputOverlay {
-  x: number
-  y: number
-  canvasScrollY: number
-  editingId?: string
-}
+type Overlay = { x: number; y: number; camX: number; camY: number; editingId?: string }
 
 export default function Canvas() {
-  const { tabs, activeId } = useTabStore()
-  const activeTab = tabs.find(t => t.id === activeId)
-  const { tool, color, lineWidth, setTool } = useToolbarStore()
+  const { tabs, activeId } = useTabStore(); const activeTab = tabs.find(t => t.id === activeId)
+  const { tool, color, lineWidth, setTool } = useToolbarStore(); const canvas = useCanvas(activeId)
+  const canvasRef = useRef<HTMLCanvasElement>(null), containerRef = useRef<HTMLDivElement>(null), barRef = useRef<HTMLDivElement>(null)
+  const camX = useRef(0), camY = useRef(0), zoomRef = useRef(1), pan = useRef<{ x: number; y: number; cx: number; cy: number } | null>(null)
+  const [camera, setCameraState] = useState({ x: 0, y: 0 }); const [zoom, setZoomState] = useState(1); const [grid, setGrid] = useState(true)
+  const drawing = useRef(false), snap = useRef<ReturnType<typeof canvas.snapshot> | null>(null), moveSnap = useRef<ReturnType<typeof canvas.snapshot> | null>(null)
+  const [selected, setSelected] = useState<string | null>(null); const drag = useRef<{ dx: number; dy: number } | null>(null)
+  const blockDrag = useRef<{ id: string; dx: number; dy: number } | null>(null); const [draggingBlock, setDraggingBlock] = useState(false); const [trash, setTrash] = useState(false)
+  const [latexBox, setLatexBox] = useState<Overlay | null>(null), [latexVal, setLatexVal] = useState(''); const latexRef = useRef<HTMLInputElement>(null)
+  const [textBox, setTextBox] = useState<Overlay | null>(null), [textVal, setTextVal] = useState(''); const textRef = useRef<HTMLTextAreaElement>(null)
+  const blocks = canvas.latexBlocks as Block[]; const size = contentSize(canvas.strokes, blocks)
 
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const containerRef = useRef<HTMLDivElement>(null)
-  const scrollbarRef = useRef<HTMLDivElement>(null)
-  const scrollYRef = useRef(0)
-  const [scrollYState, setScrollYState] = useState(0)
-  const [showGrid, setShowGrid] = useState(true)
-  const isDrawing = useRef(false)
-  const canvas = useCanvas(activeId)
-  const snapRef = useRef<ReturnType<typeof canvas.snapshot> | null>(null)
-  const moveSnapRef = useRef<ReturnType<typeof canvas.snapshot> | null>(null)
-
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  const dragOffset = useRef<{ dx: number; dy: number } | null>(null)
-  const latexDragOffset = useRef<{ dx: number; dy: number } | null>(null)
-  const draggingLatexId = useRef<string | null>(null)
-  const [isDraggingLatex, setIsDraggingLatex] = useState(false)
-  const [latexTrashActive, setLatexTrashActive] = useState(false)
-
-  const [latexInput, setLatexInput] = useState<LatexInputOverlay | null>(null)
-  const [latexVal, setLatexVal] = useState('')
-  const latexInputRef = useRef<HTMLInputElement>(null)
-
-  const [textInput, setTextInput] = useState<TextInputOverlay | null>(null)
-  const [textVal, setTextVal] = useState('')
-  const textInputRef = useRef<HTMLTextAreaElement>(null)
-
-  const contentHeight = getContentHeight(canvas.strokes, canvas.latexBlocks as ExportBlock[])
-
-  const clampScroll = useCallback((y: number) => {
-    const h = canvasRef.current?.height ?? 800
-    return Math.max(0, Math.min(contentHeight - h, y))
-  }, [contentHeight])
+  const clamp = useCallback((x: number, y: number, z = zoomRef.current) => {
+    const el = canvasRef.current, vw = (el?.width ?? 1000) / z, vh = (el?.height ?? 800) / z
+    return { x: Math.max(0, Math.min(Math.max(0, size.w - vw), x)), y: Math.max(0, Math.min(Math.max(0, size.h - vh), y)) }
+  }, [size.h, size.w])
+  const setCam = useCallback((x: number, y: number, z = zoomRef.current) => { const n = clamp(x, y, z); camX.current = n.x; camY.current = n.y; setCameraState(n) }, [clamp])
+  const world = (clientX: number, clientY: number) => { const r = canvasRef.current!.getBoundingClientRect(); return { x: (clientX - r.left) / zoomRef.current + camX.current, y: (clientY - r.top) / zoomRef.current + camY.current } }
 
   const redraw = useCallback(() => {
-    const el = canvasRef.current
-    if (!el) return
-    const ctx = el.getContext('2d')
-    if (!ctx) return
-    drawCanvas(ctx, canvas.strokes, scrollYRef.current, el.width, el.height, showGrid)
-
-    const sb = scrollbarRef.current
-    if (sb) {
-      const ratio = el.height / contentHeight
-      const thumbH = Math.max(40, ratio * el.height)
-      const thumbTop = (scrollYRef.current / contentHeight) * el.height
-      const thumb = sb.querySelector('.thumb') as HTMLElement
-      if (thumb) {
-        thumb.style.height = `${thumbH}px`
-        thumb.style.top = `${thumbTop}px`
-      }
-    }
-  }, [canvas.strokes, contentHeight, showGrid])
-
-  useEffect(() => {
-    const container = containerRef.current
-    const el = canvasRef.current
-    if (!container || !el) return
-    const ro = new ResizeObserver(() => {
-      el.width = container.clientWidth
-      el.height = container.clientHeight
-      redraw()
-    })
-    ro.observe(container)
-    return () => ro.disconnect()
-  }, [redraw])
-
-  useEffect(() => { redraw() }, [redraw])
-
-  const drawPageObjects = useCallback((ctx: CanvasRenderingContext2D, pageTop: number, pageWidth: number, pageHeight: number) => {
-    drawCanvas(ctx, canvas.strokes, pageTop, pageWidth, pageHeight, showGrid)
-
-    for (const block of canvas.latexBlocks as ExportBlock[]) {
-      const screenY = block.y - pageTop
-      if (screenY < -120 || screenY > pageHeight + 120) continue
-
-      if (block.kind === 'text') {
-        drawExportText(ctx, block.source, block.x + 7, screenY + 4, {
-          font: '15px system-ui, sans-serif',
-          color: '#e8e6e1',
-          lineHeight: 22,
-          maxWidth: 520,
-        })
-      } else {
-        drawExportText(ctx, `$${block.source}$`, block.x + 6, screenY + 2, {
-          font: '16px serif',
-          color: '#e8e6e1',
-          lineHeight: 24,
-          maxWidth: 520,
-        })
-      }
-    }
-  }, [canvas.latexBlocks, canvas.strokes, showGrid])
+    const el = canvasRef.current, ctx = el?.getContext('2d'); if (!el || !ctx) return
+    draw(ctx, canvas.strokes, camX.current, camY.current, el.width, el.height, grid, zoomRef.current)
+    const thumb = barRef.current?.querySelector('.thumb') as HTMLElement | null
+    if (thumb) { const visibleH = el.height / zoomRef.current; thumb.style.height = `${Math.max(40, (visibleH / size.h) * el.height)}px`; thumb.style.top = `${(camY.current / size.h) * el.height}px` }
+  }, [canvas.strokes, grid, size.h])
+  useEffect(() => { zoomRef.current = zoom; redraw() }, [zoom, redraw])
+  useEffect(() => { const c = containerRef.current, el = canvasRef.current; if (!c || !el) return; const ro = new ResizeObserver(() => { el.width = c.clientWidth; el.height = c.clientHeight; setCam(camX.current, camY.current); redraw() }); ro.observe(c); return () => ro.disconnect() }, [redraw, setCam])
+  useEffect(() => { redraw() }, [redraw, camera])
 
   const exportPdf = useCallback(() => {
-    const source = canvasRef.current
-    if (!source) return
-
-    const pageWidth = Math.max(source.width, PDF_PAGE_WIDTH)
-    const pageHeight = PDF_PAGE_HEIGHT
-    const pageContentHeight = pageHeight - PDF_MARGIN * 2
-    const totalPages = Math.max(1, Math.ceil(contentHeight / pageContentHeight))
-
-    const pdf = new jsPDF({
-      orientation: pageWidth > pageHeight ? 'landscape' : 'portrait',
-      unit: 'px',
-      format: [pageWidth, pageHeight],
-      compress: true,
-    })
-
-    for (let page = 0; page < totalPages; page++) {
-      if (page > 0) pdf.addPage([pageWidth, pageHeight], pageWidth > pageHeight ? 'landscape' : 'portrait')
-
-      const pageCanvas = document.createElement('canvas')
-      pageCanvas.width = pageWidth
-      pageCanvas.height = pageHeight
-      const ctx = pageCanvas.getContext('2d')
-      if (!ctx) return
-
-      ctx.fillStyle = '#111111'
-      ctx.fillRect(0, 0, pageWidth, pageHeight)
-      drawPageObjects(ctx, page * pageContentHeight - PDF_MARGIN, pageWidth, pageHeight)
-
-      ctx.save()
-      ctx.fillStyle = '#666'
-      ctx.font = '11px system-ui, sans-serif'
-      ctx.fillText(`${activeTab?.name ?? 'Nullspace'} · page ${page + 1}/${totalPages}`, PDF_MARGIN, pageHeight - 22)
-      ctx.restore()
-
-      pdf.addImage(pageCanvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, pageWidth, pageHeight)
+    const el = canvasRef.current; if (!el) return
+    const pageW = Math.max(el.width, PDF_W), pageH = PDF_H, pageContent = pageH - PDF_M * 2, total = Math.max(1, Math.ceil(size.h / pageContent))
+    const pdf = new jsPDF({ orientation: pageW > pageH ? 'landscape' : 'portrait', unit: 'px', format: [pageW, pageH], compress: true })
+    for (let i = 0; i < total; i++) {
+      if (i) pdf.addPage([pageW, pageH], pageW > pageH ? 'landscape' : 'portrait')
+      const out = document.createElement('canvas'); out.width = pageW; out.height = pageH; const ctx = out.getContext('2d'); if (!ctx) return
+      const top = i * pageContent - PDF_M; draw(ctx, canvas.strokes, 0, top, pageW, pageH, grid, 1)
+      for (const b of blocks) { const y = b.y - top; if (y < -120 || y > pageH + 120) continue; drawText(ctx, b.kind === 'text' ? b.source : `$${b.source}$`, b.x + 7, y + 4, b.kind === 'text' ? '15px system-ui, sans-serif' : '16px serif') }
+      ctx.fillStyle = '#666'; ctx.font = '11px system-ui'; ctx.fillText(`${activeTab?.name ?? 'Nullspace'} · page ${i + 1}/${total}`, PDF_M, pageH - 22)
+      pdf.addImage(out.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, pageW, pageH)
     }
-
     pdf.save(`${activeTab?.name ?? 'nullspace-note'}.pdf`.replace(/[^a-z0-9-_\.]/gi, '_'))
-  }, [activeTab?.name, contentHeight, drawPageObjects])
+  }, [activeTab?.name, blocks, canvas.strokes, grid, size.h])
 
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement).tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return
-
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (!selectedId) return
-        e.preventDefault()
-        const selectedBlock = canvas.latexBlocks.find(block => block.id === selectedId)
-        const selectedStroke = canvas.strokes.find(stroke => stroke.id === selectedId)
-        if (selectedBlock) canvas.removeLatexBlock(selectedId)
-        else if (selectedStroke) canvas.removeStroke(selectedId, canvas.snapshot())
-        setSelectedId(null)
-        return
-      }
-
-      if (e.ctrlKey || e.metaKey) {
-        if (e.key === 'z') { e.preventDefault(); canvas.undo() }
-        if (e.key === 'y') { e.preventDefault(); canvas.redo() }
-      }
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [canvas, selectedId])
-
+    const key = (e: KeyboardEvent) => { const tag = (e.target as HTMLElement).tagName; if (tag === 'INPUT' || tag === 'TEXTAREA') return; if ((e.key === 'Delete' || e.key === 'Backspace') && selected) { e.preventDefault(); const b = blocks.find(x => x.id === selected), s = canvas.strokes.find(x => x.id === selected); if (b) canvas.removeLatexBlock(selected); else if (s) canvas.removeStroke(selected, canvas.snapshot()); setSelected(null) } if (e.ctrlKey || e.metaKey) { if (e.key === 'z') { e.preventDefault(); canvas.undo() } if (e.key === 'y') { e.preventDefault(); canvas.redo() } } }
+    window.addEventListener('keydown', key); return () => window.removeEventListener('keydown', key)
+  }, [blocks, canvas, selected])
   useEffect(() => {
-    const undo = () => canvas.undo()
-    const redo = () => canvas.redo()
-    const clear = () => { setSelectedId(null); canvas.clear() }
-    const grid = () => setShowGrid(value => !value)
-    const exportCanvas = () => exportPdf()
+    const zoomTo = (e: Event) => { const z = (e as CustomEvent<number>).detail; if (![1, 1.5, 2, 3].includes(z)) return; const el = canvasRef.current, old = zoomRef.current, cx = camX.current + (el?.width ?? 1000) / (2 * old), cy = camY.current + (el?.height ?? 800) / (2 * old); zoomRef.current = z; setZoomState(z); setCam(cx - (el?.width ?? 1000) / (2 * z), cy - (el?.height ?? 800) / (2 * z), z) }
+    const clear = () => { setSelected(null); canvas.clear() }
+    window.addEventListener('nullspace:undo', canvas.undo); window.addEventListener('nullspace:redo', canvas.redo); window.addEventListener('nullspace:clear', clear); window.addEventListener('nullspace:grid', () => setGrid(v => !v)); window.addEventListener('nullspace:export', exportPdf); window.addEventListener('nullspace:zoom', zoomTo)
+    return () => { window.removeEventListener('nullspace:undo', canvas.undo); window.removeEventListener('nullspace:redo', canvas.redo); window.removeEventListener('nullspace:clear', clear); window.removeEventListener('nullspace:grid', () => setGrid(v => !v)); window.removeEventListener('nullspace:export', exportPdf); window.removeEventListener('nullspace:zoom', zoomTo) }
+  }, [canvas, exportPdf, setCam])
 
-    window.addEventListener('nullspace:undo', undo)
-    window.addEventListener('nullspace:redo', redo)
-    window.addEventListener('nullspace:clear', clear)
-    window.addEventListener('nullspace:grid', grid)
-    window.addEventListener('nullspace:export', exportCanvas)
-
-    return () => {
-      window.removeEventListener('nullspace:undo', undo)
-      window.removeEventListener('nullspace:redo', redo)
-      window.removeEventListener('nullspace:clear', clear)
-      window.removeEventListener('nullspace:grid', grid)
-      window.removeEventListener('nullspace:export', exportCanvas)
-    }
-  }, [canvas, exportPdf])
-
-  const latexPreview = latexVal
-    ? katex.renderToString(latexVal, { throwOnError: false, displayMode: true })
-    : ''
-
-  const getPoint = (e: React.PointerEvent) => {
-    const el = canvasRef.current!
-    const rect = el.getBoundingClientRect()
-    return { x: e.clientX - rect.left, y: e.clientY - rect.top + scrollYRef.current }
-  }
-
-  const getCursor = () => {
-    if (tool === 'cursor') return 'default'
-    if (tool === 'latex' || tool === 'text') return 'text'
-    if (tool === 'eraser') return 'cell'
-    return 'crosshair'
-  }
-
-  const eraseAt = (x: number, y: number) => {
-    const hit = [...canvas.strokes].reverse().find(s => strokeHitTest(s, x, y))
-    if (!hit) return false
-    canvas.removeStroke(hit.id, canvas.snapshot())
-    return true
-  }
-
+  const getCursor = () => pan.current ? 'grabbing' : tool === 'cursor' ? 'default' : (tool === 'latex' || tool === 'text') ? 'text' : tool === 'eraser' ? 'cell' : 'crosshair'
+  const eraseAt = (x: number, y: number) => { const hit = [...canvas.strokes].reverse().find(s => hitStroke(s, x, y)); if (!hit) return; canvas.removeStroke(hit.id, canvas.snapshot()) }
   const onPointerDown = (e: React.PointerEvent) => {
+    if (e.button === 2) { e.preventDefault(); pan.current = { x: e.clientX, y: e.clientY, cx: camX.current, cy: camY.current }; e.currentTarget.setPointerCapture(e.pointerId); return }
     if (e.button !== 0) return
-
-    if (tool === 'latex') {
-      const rect = canvasRef.current!.getBoundingClientRect()
-      setLatexInput({ x: e.clientX - rect.left, y: e.clientY - rect.top, canvasScrollY: scrollYRef.current })
-      setLatexVal('')
-      setTool('pen')
-      setTimeout(() => latexInputRef.current?.focus(), 10)
-      return
-    }
-
-    if (tool === 'text') {
-      const rect = canvasRef.current!.getBoundingClientRect()
-      setTextInput({ x: e.clientX - rect.left, y: e.clientY - rect.top, canvasScrollY: scrollYRef.current })
-      setTextVal('')
-      setTool('pen')
-      setTimeout(() => textInputRef.current?.focus(), 10)
-      return
-    }
-
-    if (tool === 'eraser') {
-      e.currentTarget.setPointerCapture(e.pointerId)
-      isDrawing.current = true
-      const pt = getPoint(e)
-      eraseAt(pt.x, pt.y)
-      return
-    }
-
-    if (tool === 'cursor') {
-      const pt = getPoint(e)
-      const hit = [...canvas.strokes].reverse().find(s => strokeHitTest(s, pt.x, pt.y))
-      if (hit) {
-        setSelectedId(hit.id)
-        moveSnapRef.current = canvas.snapshot()
-        const cx = hit.points.reduce((a, p) => a + p.x, 0) / hit.points.length
-        const cy = hit.points.reduce((a, p) => a + p.y, 0) / hit.points.length
-        dragOffset.current = { dx: pt.x - cx, dy: pt.y - cy }
-        e.currentTarget.setPointerCapture(e.pointerId)
-      } else {
-        setSelectedId(null)
-        dragOffset.current = null
-        moveSnapRef.current = null
-      }
-      return
-    }
-
-    e.currentTarget.setPointerCapture(e.pointerId)
-    isDrawing.current = true
-    snapRef.current = canvas.snapshot()
-    const pt = getPoint(e)
-    canvas.startStroke(pt.x, pt.y, color, tool === 'highlight' ? Math.max(lineWidth * 4, 16) : lineWidth, tool === 'highlight' ? 0.35 : 1)
+    if (tool === 'latex' || tool === 'text') { const r = canvasRef.current!.getBoundingClientRect(), box = { x: e.clientX - r.left, y: e.clientY - r.top, camX: camX.current, camY: camY.current }; if (tool === 'latex') { setLatexBox(box); setLatexVal(''); setTimeout(() => latexRef.current?.focus(), 10) } else { setTextBox(box); setTextVal(''); setTimeout(() => textRef.current?.focus(), 10) } setTool('pen'); return }
+    if (tool === 'eraser') { e.currentTarget.setPointerCapture(e.pointerId); drawing.current = true; const p = world(e.clientX, e.clientY); eraseAt(p.x, p.y); return }
+    if (tool === 'cursor') { const p = world(e.clientX, e.clientY), hit = [...canvas.strokes].reverse().find(s => hitStroke(s, p.x, p.y)); if (hit) { setSelected(hit.id); moveSnap.current = canvas.snapshot(); const cx = hit.points.reduce((a, p) => a + p.x, 0) / hit.points.length, cy = hit.points.reduce((a, p) => a + p.y, 0) / hit.points.length; drag.current = { dx: p.x - cx, dy: p.y - cy }; e.currentTarget.setPointerCapture(e.pointerId) } else { setSelected(null); drag.current = null; moveSnap.current = null } return }
+    e.currentTarget.setPointerCapture(e.pointerId); drawing.current = true; snap.current = canvas.snapshot(); const p = world(e.clientX, e.clientY); canvas.startStroke(p.x, p.y, color, tool === 'highlight' ? Math.max(lineWidth * 4, 16) : lineWidth, tool === 'highlight' ? 0.35 : 1)
   }
-
   const onPointerMove = (e: React.PointerEvent) => {
-    if (tool === 'cursor' && selectedId && dragOffset.current) {
-      const pt = getPoint(e)
-      const stroke = canvas.strokes.find(s => s.id === selectedId)
-      if (!stroke) return
-      const cx = stroke.points.reduce((a, p) => a + p.x, 0) / stroke.points.length
-      const cy = stroke.points.reduce((a, p) => a + p.y, 0) / stroke.points.length
-      canvas.moveStroke(selectedId, (pt.x - dragOffset.current.dx) - cx, (pt.y - dragOffset.current.dy) - cy)
-      return
-    }
-
-    if (tool === 'eraser' && isDrawing.current) {
-      const pt = getPoint(e)
-      eraseAt(pt.x, pt.y)
-      return
-    }
-
-    if (!isDrawing.current) return
-    const pt = getPoint(e)
-    canvas.continueStroke(pt.x, pt.y)
+    if (pan.current) { setCam(pan.current.cx - (e.clientX - pan.current.x) / zoomRef.current, pan.current.cy - (e.clientY - pan.current.y) / zoomRef.current); return }
+    if (tool === 'cursor' && selected && drag.current) { const p = world(e.clientX, e.clientY), s = canvas.strokes.find(s => s.id === selected); if (!s) return; const cx = s.points.reduce((a, p) => a + p.x, 0) / s.points.length, cy = s.points.reduce((a, p) => a + p.y, 0) / s.points.length; canvas.moveStroke(selected, (p.x - drag.current.dx) - cx, (p.y - drag.current.dy) - cy); return }
+    if (tool === 'eraser' && drawing.current) { const p = world(e.clientX, e.clientY); eraseAt(p.x, p.y); return }
+    if (!drawing.current) return; const p = world(e.clientX, e.clientY); canvas.continueStroke(p.x, p.y)
   }
+  const onPointerUp = () => { if (pan.current) { pan.current = null; return } if (tool === 'cursor') { if (selected && moveSnap.current) canvas.finishMoveStroke(moveSnap.current); drag.current = null; moveSnap.current = null; return } if (tool === 'eraser') { drawing.current = false; return } if (!drawing.current) return; drawing.current = false; canvas.endStroke(snap.current!); snap.current = null }
+  const onWheel = (e: React.WheelEvent) => { e.preventDefault(); setCam(camX.current, camY.current + e.deltaY / zoomRef.current) }
+  const commitLatex = () => { if (!latexBox || !latexVal.trim()) { setLatexBox(null); setLatexVal(''); return } if (latexBox.editingId) canvas.removeLatexBlock(latexBox.editingId); canvas.addLatexBlock({ id: Math.random().toString(36).slice(2), x: latexBox.x / zoomRef.current + latexBox.camX, y: latexBox.y / zoomRef.current + latexBox.camY, source: latexVal.trim(), kind: 'latex' }); setLatexBox(null); setLatexVal('') }
+  const commitText = () => { if (!textBox || !textVal.trim()) { setTextBox(null); setTextVal(''); return } if (textBox.editingId) canvas.removeLatexBlock(textBox.editingId); canvas.addLatexBlock({ id: Math.random().toString(36).slice(2), x: textBox.x / zoomRef.current + textBox.camX, y: textBox.y / zoomRef.current + textBox.camY, source: textVal, kind: 'text' }); setTextBox(null); setTextVal('') }
+  const editBlock = (b: Block) => { const sx = (b.x - camX.current) * zoomRef.current, sy = (b.y - camY.current) * zoomRef.current; if (b.kind === 'text') { setTextBox({ x: sx, y: sy, camX: camX.current, camY: camY.current, editingId: b.id }); setTextVal(b.source); setTimeout(() => textRef.current?.focus(), 10) } else { setLatexBox({ x: sx, y: sy, camX: camX.current, camY: camY.current, editingId: b.id }); setLatexVal(b.source); setTimeout(() => latexRef.current?.focus(), 10) } }
+  const startBlockDrag = (e: React.PointerEvent<HTMLDivElement>, b: Block) => { if (tool !== 'cursor') return; e.stopPropagation(); const p = world(e.clientX, e.clientY); setSelected(b.id); setDraggingBlock(true); moveSnap.current = canvas.snapshot(); blockDrag.current = { id: b.id, dx: p.x - b.x, dy: p.y - b.y }; setTrash(e.clientX < TRASH_X); e.currentTarget.setPointerCapture(e.pointerId) }
+  const moveBlockDrag = (e: React.PointerEvent<HTMLDivElement>) => { if (!blockDrag.current) return; const p = world(e.clientX, e.clientY); setTrash(e.clientX < TRASH_X); canvas.updateLatexBlock(blockDrag.current.id, { x: p.x - blockDrag.current.dx, y: p.y - blockDrag.current.dy }) }
+  const stopBlockDrag = () => { const id = blockDrag.current?.id; if (id && trash) canvas.removeLatexBlock(id); else if (id && moveSnap.current) canvas.finishMoveLatexBlock(moveSnap.current); blockDrag.current = null; moveSnap.current = null; setDraggingBlock(false); setTrash(false) }
+  const latexPreview = latexVal ? katex.renderToString(latexVal, { throwOnError: false, displayMode: true }) : ''
 
-  const onPointerUp = () => {
-    if (tool === 'cursor') {
-      if (selectedId && moveSnapRef.current) canvas.finishMoveStroke(moveSnapRef.current)
-      dragOffset.current = null
-      moveSnapRef.current = null
-      return
-    }
-    if (tool === 'eraser') { isDrawing.current = false; return }
-    if (!isDrawing.current) return
-    isDrawing.current = false
-    canvas.endStroke(snapRef.current!)
-    snapRef.current = null
-  }
-
-  const onWheel = (e: React.WheelEvent) => {
-    e.preventDefault()
-    scrollYRef.current = clampScroll(scrollYRef.current + e.deltaY)
-    setScrollYState(scrollYRef.current)
-    redraw()
-  }
-
-  const commitLatex = () => {
-    if (!latexInput || !latexVal.trim()) { setLatexInput(null); setLatexVal(''); return }
-    if (latexInput.editingId) canvas.removeLatexBlock(latexInput.editingId)
-    canvas.addLatexBlock({ id: Math.random().toString(36).slice(2), x: latexInput.x, y: latexInput.y + latexInput.canvasScrollY, source: latexVal.trim(), kind: 'latex' })
-    setLatexInput(null); setLatexVal(''); setTool('pen')
-  }
-
-  const commitText = () => {
-    if (!textInput || !textVal.trim()) { setTextInput(null); setTextVal(''); return }
-    if (textInput.editingId) canvas.removeLatexBlock(textInput.editingId)
-    canvas.addLatexBlock({ id: Math.random().toString(36).slice(2), x: textInput.x, y: textInput.y + textInput.canvasScrollY, source: textVal, kind: 'text' })
-    setTextInput(null); setTextVal(''); setTool('pen')
-  }
-
-  const editBlock = (block: ExportBlock) => {
-    if (block.kind === 'text') {
-      setTextInput({ x: block.x, y: block.y - scrollYState, canvasScrollY: scrollYState, editingId: block.id })
-      setTextVal(block.source)
-      setTimeout(() => textInputRef.current?.focus(), 10)
-    } else {
-      setLatexInput({ x: block.x, y: block.y - scrollYState, canvasScrollY: scrollYState, editingId: block.id })
-      setLatexVal(block.source)
-      setTimeout(() => latexInputRef.current?.focus(), 10)
-    }
-  }
-
-  const startLatexDrag = (e: React.PointerEvent<HTMLDivElement>, blockId: string, blockX: number, blockY: number) => {
-    if (tool !== 'cursor') return
-    e.stopPropagation()
-    setSelectedId(blockId)
-    draggingLatexId.current = blockId
-    setIsDraggingLatex(true)
-    moveSnapRef.current = canvas.snapshot()
-    latexDragOffset.current = { dx: e.clientX - blockX, dy: e.clientY - (blockY - scrollYState) }
-    setLatexTrashActive(e.clientX < LATEX_TRASH_ZONE_X)
-    e.currentTarget.setPointerCapture(e.pointerId)
-  }
-
-  const moveLatexDrag = (e: React.PointerEvent<HTMLDivElement>) => {
-    const id = draggingLatexId.current
-    if (!id || !latexDragOffset.current) return
-    setLatexTrashActive(e.clientX < LATEX_TRASH_ZONE_X)
-    canvas.updateLatexBlock(id, { x: e.clientX - latexDragOffset.current.dx, y: e.clientY - latexDragOffset.current.dy + scrollYState })
-  }
-
-  const stopLatexDrag = () => {
-    const id = draggingLatexId.current
-    if (id && latexTrashActive) canvas.removeLatexBlock(id)
-    else if (id && moveSnapRef.current) canvas.finishMoveLatexBlock(moveSnapRef.current)
-    draggingLatexId.current = null
-    latexDragOffset.current = null
-    moveSnapRef.current = null
-    setIsDraggingLatex(false)
-    setLatexTrashActive(false)
-  }
-
-  return (
-    <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--bg)', minWidth: 0 }}>
-      <div style={{ padding: '11px 20px', borderBottom: '1px solid var(--border)', fontSize: 13, color: 'var(--text2)', flexShrink: 0, letterSpacing: '0.01em', display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span>{activeTab?.name ?? 'Untitled'}</span>
-        <span style={{ fontSize: 10, color: 'var(--text3)', marginLeft: 4 }}>[{tool}]</span>
-        <span style={{ fontSize: 10, color: 'var(--text3)' }}>{showGrid ? 'grid:on' : 'grid:off'}</span>
-      </div>
-
-      <div ref={containerRef} style={{ flex: 1, position: 'relative', overflow: 'hidden', minWidth: 0 }}>
-        <canvas ref={canvasRef} style={{ display: 'block', cursor: getCursor(), touchAction: 'none' }} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerLeave={onPointerUp} onWheel={onWheel} />
-
-        {isDraggingLatex && (
-          <div style={{ position: 'absolute', left: 18, top: '50%', transform: 'translateY(-50%)', width: latexTrashActive ? 82 : 70, height: latexTrashActive ? 82 : 70, borderRadius: 18, border: `1px solid ${latexTrashActive ? '#c87060' : 'rgba(200,112,96,0.45)'}`, background: latexTrashActive ? 'rgba(200,112,96,0.18)' : 'rgba(10,10,10,0.55)', color: latexTrashActive ? '#ff8a7a' : '#c87060', boxShadow: latexTrashActive ? '0 0 26px rgba(200,112,96,0.45)' : '0 8px 28px rgba(0,0,0,0.35)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, zIndex: 35, pointerEvents: 'none', fontFamily: 'system-ui, sans-serif', fontSize: 10, transition: 'all 0.12s ease' }}>
-            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></svg>
-            <span>{latexTrashActive ? 'release' : 'trash'}</span>
-          </div>
-        )}
-
-        {(canvas.latexBlocks as ExportBlock[]).map(block => {
-          const isText = block.kind === 'text'
-          const baseStyle: CSSProperties = { position: 'absolute', left: block.x, top: block.y - scrollYState, color: '#e8e6e1', fontSize: 15, lineHeight: isText ? 1.45 : undefined, pointerEvents: tool === 'cursor' ? 'auto' : 'none', userSelect: 'none', cursor: tool === 'cursor' ? 'move' : 'default', background: isText ? 'rgba(20,20,20,0.08)' : 'transparent', borderRadius: 4, padding: isText ? '4px 7px' : '2px 6px', border: selectedId === block.id ? '1px solid #6fa3d4' : '1px solid transparent', opacity: draggingLatexId.current === block.id && latexTrashActive ? 0.55 : 1, whiteSpace: isText ? 'pre-wrap' : undefined, minWidth: isText ? 80 : undefined, maxWidth: isText ? 520 : undefined, fontFamily: isText ? 'system-ui, sans-serif' : undefined }
-          return isText ? (
-            <div key={block.id} style={baseStyle} onPointerDown={e => startLatexDrag(e, block.id, block.x, block.y)} onPointerMove={moveLatexDrag} onPointerUp={stopLatexDrag} onPointerCancel={stopLatexDrag} onDoubleClick={() => tool === 'cursor' && editBlock(block)}>{block.source}</div>
-          ) : (
-            <div key={block.id} style={baseStyle} onPointerDown={e => startLatexDrag(e, block.id, block.x, block.y)} onPointerMove={moveLatexDrag} onPointerUp={stopLatexDrag} onPointerCancel={stopLatexDrag} onDoubleClick={() => tool === 'cursor' && editBlock(block)} dangerouslySetInnerHTML={{ __html: katex.renderToString(block.source, { throwOnError: false, displayMode: true }) }} />
-          )
-        })}
-
-        {latexInput && (
-          <div style={{ position: 'absolute', left: latexInput.x, top: latexInput.y, zIndex: 20, background: '#141414', border: '1px solid #6fa3d4', borderRadius: 6, padding: 10, minWidth: 220, boxShadow: '0 4px 24px rgba(0,0,0,0.6)' }}>
-            <div style={{ fontSize: 10, color: '#6fa3d4', marginBottom: 6 }}>LaTeX</div>
-            <input ref={latexInputRef} value={latexVal} onChange={e => setLatexVal(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') commitLatex(); if (e.key === 'Escape') { setLatexInput(null); setLatexVal(''); setTool('pen') } }} placeholder="\frac{1}{2} + x^2" style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#e8e6e1', fontSize: 12, fontFamily: 'monospace' }} />
-            {latexPreview && <div style={{ marginTop: 8, color: '#e8e6e1', fontSize: 14 }} dangerouslySetInnerHTML={{ __html: latexPreview }} />}
-            <div style={{ marginTop: 6, fontSize: 9, color: '#555' }}>Enter to place · Esc to cancel</div>
-          </div>
-        )}
-
-        {textInput && (
-          <div style={{ position: 'absolute', left: textInput.x, top: textInput.y, zIndex: 20, background: 'rgba(20,20,20,0.92)', border: '1px solid #6db88a', borderRadius: 6, padding: 10, minWidth: 260, boxShadow: '0 4px 24px rgba(0,0,0,0.6)' }}>
-            <div style={{ fontSize: 10, color: '#6db88a', marginBottom: 6 }}>Text</div>
-            <textarea ref={textInputRef} value={textVal} onChange={e => setTextVal(e.target.value)} onBlur={commitText} onKeyDown={e => { if (e.key === 'Escape') { setTextInput(null); setTextVal(''); setTool('pen') } if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') commitText() }} placeholder="Type notes here..." rows={4} style={{ width: 300, minHeight: 90, resize: 'both', background: 'transparent', border: 'none', outline: 'none', color: '#e8e6e1', fontSize: 14, lineHeight: 1.45, fontFamily: 'system-ui, sans-serif', whiteSpace: 'pre-wrap' }} />
-            <div style={{ marginTop: 6, fontSize: 9, color: '#555' }}>Enter = line break · Ctrl+Enter or click away = place · Esc = cancel</div>
-          </div>
-        )}
-
-        <div ref={scrollbarRef} style={{ position: 'absolute', right: 4, top: 8, bottom: 8, width: 5, borderRadius: 3, cursor: 'pointer' }} onClick={(e) => { const rect = (e.currentTarget as HTMLElement).getBoundingClientRect(); const ratio = (e.clientY - rect.top) / rect.height; scrollYRef.current = clampScroll(ratio * contentHeight); setScrollYState(scrollYRef.current); redraw() }}>
-          <div className="thumb" style={{ position: 'absolute', left: 0, right: 0, top: 0, height: 40, background: '#333', borderRadius: 3, transition: 'background 0.1s' }} onMouseEnter={e => (e.currentTarget.style.background = '#444')} onMouseLeave={e => (e.currentTarget.style.background = '#333')} />
-        </div>
-      </div>
-    </main>
-  )
+  return <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--bg)', minWidth: 0 }}>
+    <div style={{ padding: '11px 20px', borderBottom: '1px solid var(--border)', fontSize: 13, color: 'var(--text2)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10 }}><span>{activeTab?.name ?? 'Untitled'}</span><span style={{ fontSize: 10, color: 'var(--text3)' }}>[{tool}]</span><span style={{ fontSize: 10, color: 'var(--text3)' }}>{grid ? 'grid:on' : 'grid:off'}</span><span style={{ fontSize: 10, color: 'var(--text3)' }}>zoom:{Math.round(zoom * 100)}%</span><span style={{ fontSize: 10, color: 'var(--text3)' }}>right-drag: pan</span></div>
+    <div ref={containerRef} style={{ flex: 1, position: 'relative', overflow: 'hidden', minWidth: 0 }} onContextMenu={e => e.preventDefault()}>
+      <canvas ref={canvasRef} style={{ display: 'block', cursor: getCursor(), touchAction: 'none' }} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerLeave={onPointerUp} onWheel={onWheel} />
+      {draggingBlock && <div style={{ position: 'absolute', left: 18, top: '50%', transform: 'translateY(-50%)', width: trash ? 82 : 70, height: trash ? 82 : 70, borderRadius: 18, border: `1px solid ${trash ? '#c87060' : 'rgba(200,112,96,0.45)'}`, background: trash ? 'rgba(200,112,96,0.18)' : 'rgba(10,10,10,0.55)', color: trash ? '#ff8a7a' : '#c87060', boxShadow: trash ? '0 0 26px rgba(200,112,96,0.45)' : '0 8px 28px rgba(0,0,0,0.35)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, zIndex: 35, pointerEvents: 'none', fontFamily: 'system-ui, sans-serif', fontSize: 10 }}><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg><span>{trash ? 'release' : 'trash'}</span></div>}
+      {blocks.map(b => { const isText = b.kind === 'text', sx = (b.x - camera.x) * zoom, sy = (b.y - camera.y) * zoom; const style: CSSProperties = { position: 'absolute', left: sx, top: sy, transform: `scale(${zoom})`, transformOrigin: 'top left', color: '#e8e6e1', fontSize: 15, lineHeight: isText ? 1.45 : undefined, pointerEvents: tool === 'cursor' ? 'auto' : 'none', userSelect: 'none', cursor: tool === 'cursor' ? 'move' : 'default', background: isText ? 'rgba(20,20,20,0.08)' : 'transparent', borderRadius: 4, padding: isText ? '4px 7px' : '2px 6px', border: selected === b.id ? '1px solid #6fa3d4' : '1px solid transparent', whiteSpace: isText ? 'pre-wrap' : undefined, minWidth: isText ? 80 : undefined, maxWidth: isText ? 520 : undefined, fontFamily: isText ? 'system-ui, sans-serif' : undefined }; return isText ? <div key={b.id} style={style} onPointerDown={e => startBlockDrag(e, b)} onPointerMove={moveBlockDrag} onPointerUp={stopBlockDrag} onPointerCancel={stopBlockDrag} onDoubleClick={() => tool === 'cursor' && editBlock(b)}>{b.source}</div> : <div key={b.id} style={style} onPointerDown={e => startBlockDrag(e, b)} onPointerMove={moveBlockDrag} onPointerUp={stopBlockDrag} onPointerCancel={stopBlockDrag} onDoubleClick={() => tool === 'cursor' && editBlock(b)} dangerouslySetInnerHTML={{ __html: katex.renderToString(b.source, { throwOnError: false, displayMode: true }) }} /> })}
+      {latexBox && <div style={{ position: 'absolute', left: latexBox.x, top: latexBox.y, zIndex: 20, background: '#141414', border: '1px solid #6fa3d4', borderRadius: 6, padding: 10, minWidth: 220, boxShadow: '0 4px 24px rgba(0,0,0,0.6)' }}><div style={{ fontSize: 10, color: '#6fa3d4', marginBottom: 6 }}>LaTeX</div><input ref={latexRef} value={latexVal} onChange={e => setLatexVal(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') commitLatex(); if (e.key === 'Escape') { setLatexBox(null); setLatexVal('') } }} placeholder="\frac{1}{2} + x^2" style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#e8e6e1', fontSize: 12, fontFamily: 'monospace' }} />{latexPreview && <div style={{ marginTop: 8, color: '#e8e6e1', fontSize: 14 }} dangerouslySetInnerHTML={{ __html: latexPreview }} />}<div style={{ marginTop: 6, fontSize: 9, color: '#555' }}>Enter to place · Esc to cancel</div></div>}
+      {textBox && <div style={{ position: 'absolute', left: textBox.x, top: textBox.y, zIndex: 20, background: 'rgba(20,20,20,0.92)', border: '1px solid #6db88a', borderRadius: 6, padding: 10, minWidth: 260, boxShadow: '0 4px 24px rgba(0,0,0,0.6)' }}><div style={{ fontSize: 10, color: '#6db88a', marginBottom: 6 }}>Text</div><textarea ref={textRef} value={textVal} onChange={e => setTextVal(e.target.value)} onBlur={commitText} onKeyDown={e => { if (e.key === 'Escape') { setTextBox(null); setTextVal('') } if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') commitText() }} placeholder="Type notes here..." rows={4} style={{ width: 300, minHeight: 90, resize: 'both', background: 'transparent', border: 'none', outline: 'none', color: '#e8e6e1', fontSize: 14, lineHeight: 1.45, fontFamily: 'system-ui, sans-serif', whiteSpace: 'pre-wrap' }} /><div style={{ marginTop: 6, fontSize: 9, color: '#555' }}>Enter = line break · Ctrl+Enter or click away = place · Esc = cancel</div></div>}
+      <div ref={barRef} style={{ position: 'absolute', right: 4, top: 8, bottom: 8, width: 5, borderRadius: 3, cursor: 'pointer' }} onClick={e => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setCam(camX.current, ((e.clientY - r.top) / r.height) * size.h) }}><div className="thumb" style={{ position: 'absolute', left: 0, right: 0, top: 0, height: 40, background: '#333', borderRadius: 3 }} /></div>
+    </div>
+  </main>
 }
