@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useToolbarStore, COLOR_OPTIONS, type Tool } from '../store/toolbar'
 
 const BOOT_LINES = [
@@ -12,7 +13,28 @@ const BOOT_LINES = [
 
 type Line = { text: string; type: 'system' | 'user' | 'output' | 'error' }
 
-const ALL_COMMANDS = ['help', 'pen', 'highlight', 'eraser', 'cursor', 'latex', 'text', 'grid', 'export', 'zoom', 'unzoom', 'size', 'color', 'undo', 'redo', 'clear']
+const ALL_COMMANDS = [
+  'help',
+  'pen',
+  'highlight',
+  'eraser',
+  'cursor',
+  'latex',
+  'text',
+  'grid',
+  'export',
+  'zoom',
+  'unzoom',
+  'fullscreen',
+  'unfullscreen',
+  'quit',
+  'exit',
+  'size',
+  'color',
+  'undo',
+  'redo',
+  'clear',
+]
 
 function normalizeCommand(raw: string) {
   return raw.trim().toLowerCase().replace(/^\//, '')
@@ -81,6 +103,24 @@ export default function Terminal({ onUndo, onRedo, onClear, onClose }: Props) {
     return () => window.removeEventListener('nullspace:focus-terminal', focusInput)
   }, [])
 
+  const setDesktopFullscreen = useCallback((enabled: boolean) => {
+    getCurrentWindow()
+      .setFullscreen(enabled)
+      .then(() => push(enabled ? 'desktop fullscreen enabled.' : 'desktop fullscreen disabled.'))
+      .catch(() => push('fullscreen control only works inside the desktop app.', 'error'))
+  }, [push])
+
+  const quitDesktopApp = useCallback(() => {
+    push('saving local data...')
+    window.dispatchEvent(new CustomEvent('nullspace:save-now'))
+
+    window.setTimeout(() => {
+      getCurrentWindow()
+        .close()
+        .catch(() => push('quit only works inside the desktop app.', 'error'))
+    }, 350)
+  }, [push])
+
   const handleCommand = useCallback((raw: string) => {
     const cmd = normalizeCommand(raw)
     if (!cmd) return
@@ -127,21 +167,24 @@ export default function Terminal({ onUndo, onRedo, onClear, onClose }: Props) {
     switch (command) {
       case 'help':
         push('available commands:')
-        push('  /pen        - freehand drawing tool')
-        push('  /highlight  - highlight brush')
-        push('  /eraser     - erase strokes')
-        push('  /cursor     - select and move objects')
-        push('  /text       - regular multiline text box')
-        push('  /latex      - LaTeX equation box')
-        push('  /grid       - toggle dotted grid')
-        push('  /export     - export canvas as paginated PDF')
-        push('  /zoom       - choose 150%, 200%, 300%, 400%, or 500%')
-        push('  /unzoom     - return to 100%')
-        push('  /size       - set stroke size')
-        push('  /color      - choose stroke color by name')
-        push('  /undo       - undo last action')
-        push('  /redo       - redo last action')
-        push('  /clear      - clear entire canvas')
+        push('  /pen          - freehand drawing tool')
+        push('  /highlight    - highlight brush')
+        push('  /eraser       - erase strokes')
+        push('  /cursor       - select and move objects')
+        push('  /text         - regular multiline text box')
+        push('  /latex        - LaTeX equation box')
+        push('  /grid         - toggle dotted grid')
+        push('  /export       - export canvas as paginated PDF')
+        push('  /zoom         - choose 150%, 200%, 300%, 400%, or 500%')
+        push('  /unzoom       - return to 100%')
+        push('  /fullscreen   - enter desktop fullscreen')
+        push('  /unfullscreen - leave desktop fullscreen')
+        push('  /quit         - save and close the desktop app')
+        push('  /size         - set stroke size')
+        push('  /color        - choose stroke color by name')
+        push('  /undo         - undo last action')
+        push('  /redo         - redo last action')
+        push('  /clear        - clear entire canvas')
         break
       case 'pen': setTool('pen'); push('tool: pen'); break
       case 'highlight': case 'hi': setTool('highlight'); push('tool: highlight'); break
@@ -168,6 +211,9 @@ export default function Terminal({ onUndo, onRedo, onClear, onClose }: Props) {
         break
       }
       case 'unzoom': window.dispatchEvent(new CustomEvent('nullspace:zoom', { detail: 1 })); push('zoom reset to 100%.'); break
+      case 'fullscreen': case 'fs': setDesktopFullscreen(true); break
+      case 'unfullscreen': case 'windowed': case 'unfs': setDesktopFullscreen(false); break
+      case 'quit': case 'exit': quitDesktopApp(); break
       case 'size': case 'sz': push(`current size: ${lineWidth}. enter new size (1-100):`); setAwaitingSize(true); break
       case 'color': case 'co':
         push('select color by name or number:')
@@ -179,7 +225,7 @@ export default function Terminal({ onUndo, onRedo, onClear, onClose }: Props) {
       case 'clear': onClear(); push('canvas cleared.'); break
       default: push(`unknown command: "${cmd}". type "help" for commands.`, 'error')
     }
-  }, [awaitingZoom, awaitingSize, awaitingColor, lineWidth, onUndo, onRedo, onClear, push, setColor, setLineWidth, setTool])
+  }, [awaitingZoom, awaitingSize, awaitingColor, lineWidth, onUndo, onRedo, onClear, push, setColor, setLineWidth, setTool, setDesktopFullscreen, quitDesktopApp])
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
